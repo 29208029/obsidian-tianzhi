@@ -1,6 +1,6 @@
 {
   "name": "tianzhi-llm-wiki",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "packageManager": "pnpm@10.14.0",
   "description": "天智大模型Wiki - 多页知识库生成 + 对话式查询 + 侧边栏",
   "main": "main.js",

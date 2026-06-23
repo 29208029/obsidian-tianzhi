@@ -1,0 +1,809 @@
+// Query Engine - Conversational Wiki Query Modal
+
+import { App, Modal, Notice, MarkdownRenderer, Component, setIcon } from 'obsidian';
+import LLMWikiPlugin from '../main';
+import { TEXTS } from '../texts';
+import { WIKI_LANGUAGES } from '../types';
+import { PROMPTS } from '../prompts';
+import { parseJsonResponse, parseIndexForPages, localKeywordMatch } from '../utils';
+import { MAX_PAGE_CONTENT_CHARS, TOKENS_QUERY_PAGE_SELECT, TOKENS_QUERY_LLM_SELECT, TOKENS_QUERY_SAVE_DEDUP, NOTICE_BRIEF, NOTICE_NORMAL, NOTICE_ERROR } from '../constants';
+import { ChatRenderer } from './chat-renderer';
+
+// ---- Suggest Save Modal (post-query feedback) ----
+
+class SuggestSaveModal extends Modal {
+  private plugin: LLMWikiPlugin;
+  private history: {
+    messages: Array<{
+      role: 'user' | 'assistant';
+      content: string;
+      timestamp: number;
+    }>;
+  };
+  private reason: string;
+
+  constructor(
+    app: App,
+    plugin: LLMWikiPlugin,
+    history: { messages: Array<{ role: 'user' | 'assistant'; content: string; timestamp: number }> },
+    reason?: string
+  ) {
+    super(app);
+    this.plugin = plugin;
+    this.history = history;
+    this.reason = reason || '';
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    const texts = TEXTS[this.plugin.settings.language];
+
+    contentEl.addClass('llm-wiki-suggest-save-modal');
+
+    contentEl.createEl('h3', { text: texts.querySuggestSaveTitle });
+    contentEl.createEl('p', { text: texts.querySuggestSaveDesc });
+
+    if (this.reason) {
+      const reasonBox = contentEl.createDiv({ cls: 'llm-wiki-suggest-save-reason' });
+      reasonBox.createEl('strong', { text: 'Reason: ' });
+      reasonBox.createSpan({ text: this.reason });
+    }
+
+    const buttonRow = contentEl.createDiv({ cls: 'llm-wiki-suggest-save-buttons' });
+
+    buttonRow.createEl('button', { text: texts.querySuggestSaveYes, cls: 'mod-cta' })
+      .addEventListener('click', () => {
+        this.close();
+        void this.doSave();
+      });
+
+    buttonRow.createEl('button', { text: texts.querySuggestSaveNo })
+      .addEventListener('click', () => {
+        this.close();
+      });
+  }
+
+  private async doSave(): Promise<void> {
+    const texts = TEXTS[this.plugin.settings.language];
+    const progressNotice = new Notice(texts.savingToWiki, 0);
+
+    const origProgress = this.plugin.wikiEngine.getProgressCallback();
+    this.plugin.wikiEngine.setProgressCallback((msg: string) => {
+      progressNotice.setMessage(msg);
+    });
+
+    try {
+      const report = await this.plugin.wikiEngine.ingestConversation(this.history);
+      this.plugin.settings.lastOfferedQueryHash = JSON.stringify(this.history.messages);
+      void this.plugin.saveSettings();
+      const summary = texts.saveSummary
+        .replace('{entities}', String(report.entitiesCreated))
+        .replace('{concepts}', String(report.conceptsCreated))
+        .replace('{pages}', String(report.createdPages.length));
+      new Notice(`${texts.saveToWikiSuccess}\n${summary}`, NOTICE_NORMAL);
+    } catch (error) {
+      console.error('Save failed:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      new Notice(texts.queryModalErrorPrefix + errorMsg, NOTICE_ERROR);
+    } finally {
+      progressNotice.hide();
+      this.plugin.wikiEngine.setProgressCallback(origProgress);
+    }
+  }
+
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+  }
+}
+
+// ---- Query Modal ----
+
+export class QueryModal extends Modal {
+  plugin: LLMWikiPlugin;
+  history: {
+    messages: Array<{
+      role: 'user' | 'assistant';
+      content: string;
+      timestamp: number;
+    }>;
+  };
+  isStreaming: boolean;
+  aborted: boolean;
+  accumulatedResponse: string;
+  currentResponseDiv: HTMLElement | null;
+  historyContainer: HTMLElement;
+  inputArea: HTMLTextAreaElement;
+  sendBtn: HTMLButtonElement;
+  historyCountDisplay: HTMLElement;
+  private pendingInput: string;
+  activeRenderComponent: Component | null;
+
+  constructor(app: App, plugin: LLMWikiPlugin) {
+    super(app);
+    this.plugin = plugin;
+    this.history = {
+      messages: plugin.settings.queryHistory || []
+    };
+    this.isStreaming = false;
+    this.aborted = false;
+    this.accumulatedResponse = '';
+    this.currentResponseDiv = null;
+    this.historyContainer = null as unknown as HTMLElement;
+    this.inputArea = null as unknown as HTMLTextAreaElement;
+    this.sendBtn = null as unknown as HTMLButtonElement;
+    this.historyCountDisplay = null as unknown as HTMLElement;
+    this.activeRenderComponent = new Component();
+    this.pendingInput = '';
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    this.modalEl.addClass('llm-wiki-query-modal');
+    contentEl.addClass('llm-wiki-query-content');
+
+    ChatRenderer.renderChatUI(this, contentEl);
+  }
+
+  onClose() {
+    const { contentEl } = this;
+
+    if (this.activeRenderComponent) {
+      this.activeRenderComponent.unload();
+      this.activeRenderComponent = null;
+    }
+
+    this.plugin.settings.queryHistory = this.history.messages;
+    void this.plugin.saveSettings();
+
+    contentEl.empty();
+  }
+
+  private evaluateAndSuggestSave(): void {
+    const assistantMessages = this.history.messages.filter(m => m.role === 'assistant');
+    if (assistantMessages.length < 1) return;
+
+    // Skip if this conversation was already offered for save and hasn't changed
+    const hash = this.computeConversationHash();
+    if (hash === this.plugin.settings.lastOfferedQueryHash) return;
+
+    // Always use LLM to evaluate conversation value semantically
+    void this.evaluateWithLLM();
+  }
+
+  private computeConversationHash(): string {
+    return JSON.stringify(this.history.messages);
+  }
+
+  private async evaluateWithLLM(): Promise<void> {
+    if (!this.plugin.llmClient) return;
+
+    try {
+      const conversationText = this.plugin.wikiEngine.formatConversation(this.history);
+      const prompt = PROMPTS.evaluateConversationValue
+        .replace('{{conversation}}', conversationText.substring(0, 3000));
+
+      const response = await this.plugin.llmClient.createMessage({
+        model: this.plugin.settings.model,
+        max_tokens: TOKENS_QUERY_SAVE_DEDUP,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      disableThinking: this.plugin.settings.disableThinking,
+    });
+
+      const parsed = await parseJsonResponse(response) as { valuable?: boolean; reason?: string } | null;
+      if (parsed?.valuable) {
+        this.plugin.settings.lastOfferedQueryHash = this.computeConversationHash();
+        void this.plugin.saveSettings();
+        new SuggestSaveModal(this.app, this.plugin, this.history, parsed.reason || '').open();
+      }
+    } catch {
+      // LLM evaluation failed, skip suggestion
+    }
+  }
+
+  async sendMessage(userMessage: string) {
+    if (!userMessage.trim() || this.isStreaming) return;
+
+    const texts = TEXTS[this.plugin.settings.language];
+
+    this.history.messages.push({
+      role: 'user',
+      content: userMessage,
+      timestamp: Date.now()
+    });
+
+    this.renderHistoryMessage('user', userMessage);
+    // The empty state is only shown when history is empty. Hiding it on
+    // the first user message prevents the placeholder from sitting on
+    // top of (or above) the very first message.
+    ChatRenderer.hideEmptyState(this.historyContainer);
+    this.scrollToBottom();
+
+    this.limitHistory();
+
+    // Switch button to stop mode
+    this.isStreaming = true;
+    this.aborted = false;
+    this.pendingInput = '';
+    this.inputArea.value = '';
+    this.sendBtn.addClass('is-streaming');
+
+    // ChatGPT-style flat layout: full-width message div
+    const messageDiv = this.historyContainer.createDiv({
+      cls: 'llm-wiki-query-message-wrapper llm-wiki-query-message-assistant llm-wiki-query-response-live'
+    });
+
+    messageDiv.createDiv({
+      cls: 'llm-wiki-query-message-label',
+      text: '🤖 Wiki'
+    });
+
+    const contentDiv = messageDiv.createDiv({
+      cls: 'llm-wiki-query-message-body markdown-reading-view'
+    });
+
+    const statusIndicator = messageDiv.createDiv({
+      cls: 'llm-wiki-query-status',
+      text: texts.queryPhaseSearching
+    });
+
+    this.accumulatedResponse = '';
+
+    // Track found pages info to merge into generating phase
+    let foundPagesInfo = '';
+    const foundPrefix = texts.queryPhaseFoundPages.split('{count}')[0];
+
+    // Phase 1 & 2: Build wiki context (search → found → context ready)
+    const wikiContext = await this.buildWikiContext(userMessage, (phase: string) => {
+      if (phase.startsWith(foundPrefix)) {
+        foundPagesInfo = phase;
+      }
+      statusIndicator.setText(phase);
+    });
+
+    if (this.aborted) {
+      statusIndicator.remove();
+      this.finishGeneration(texts as unknown as Record<string, string>);
+      return;
+    }
+
+    // Phase 3: Generate response with elapsed timer
+    const conversationMessages = this.history.messages.map(msg => ({
+      role: msg.role,
+      content: msg.content
+    }));
+
+    const startTime = Date.now();
+    let statusTemplate = foundPagesInfo
+      ? `${foundPagesInfo}, ${texts.queryPhaseGenerating}`
+      : texts.queryPhaseGenerating;
+    const timerInterval = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      statusIndicator.setText(statusTemplate.replace('{time}', elapsed.toString()));
+    }, 1000);
+
+    const cleanupTimer = () => {
+      window.clearInterval(timerInterval);
+      statusIndicator.remove();
+    };
+
+    try {
+      if (this.plugin.llmClient?.createMessageStream) {
+        let fullResponse = '';
+        try {
+          fullResponse = await this.plugin.llmClient.createMessageStream({
+            model: this.plugin.settings.model,
+            max_tokens: TOKENS_QUERY_LLM_SELECT,
+            system: wikiContext,
+            messages: conversationMessages,
+            onChunk: (chunk) => {
+              if (this.aborted) return;
+              this.accumulatedResponse += chunk;
+              this.renderMarkdownContent(this.accumulatedResponse, contentDiv);
+              this.scrollToBottom();
+            },
+            disableThinking: this.plugin.settings.disableThinking,
+          });
+          cleanupTimer();
+        } catch (streamErr) {
+          if (this.aborted) {
+            cleanupTimer();
+            this.finishGeneration(texts as unknown as Record<string, string>);
+            return;
+          }
+          console.warn('Streaming query failed, falling back to non-streaming:', streamErr);
+          statusTemplate = foundPagesInfo
+            ? `${foundPagesInfo}, ${texts.queryPhaseNonStreaming}`
+            : texts.queryPhaseNonStreaming;
+          // Fallback: try non-streaming if streaming fails
+          if (this.plugin.llmClient?.createMessage) {
+            try {
+              fullResponse = await this.plugin.llmClient.createMessage({
+                model: this.plugin.settings.model,
+                max_tokens: TOKENS_QUERY_LLM_SELECT,
+                system: wikiContext,
+                messages: conversationMessages
+              });
+              if (this.aborted) {
+                cleanupTimer();
+                this.finishGeneration(texts as unknown as Record<string, string>);
+                return;
+              }
+              this.renderMarkdownContent(fullResponse, contentDiv);
+              this.scrollToBottom();
+            } catch (fallbackErr) {
+              console.error('Non-streaming fallback also failed:', fallbackErr);
+              const errMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+              contentDiv.createEl('p', {
+                text: texts.queryModalErrorPrefix + errMsg,
+                cls: 'llm-wiki-query-error'
+              });
+              cleanupTimer();
+              this.finishGeneration(texts as unknown as Record<string, string>);
+              return;
+            }
+          } else {
+            const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+            contentDiv.createEl('p', {
+              text: texts.queryModalErrorPrefix + errMsg,
+              cls: 'llm-wiki-query-error'
+            });
+            cleanupTimer();
+            this.finishGeneration(texts as unknown as Record<string, string>);
+            return;
+          }
+          cleanupTimer();
+        }
+
+        if (!this.aborted) {
+          this.history.messages.push({
+            role: 'assistant',
+            content: fullResponse,
+            timestamp: Date.now()
+          });
+        }
+      } else {
+        statusTemplate = foundPagesInfo
+          ? `${foundPagesInfo}, ${texts.queryPhaseNonStreaming}`
+          : texts.queryPhaseNonStreaming;
+        const response = await this.plugin.llmClient!.createMessage({
+          model: this.plugin.settings.model,
+          max_tokens: TOKENS_QUERY_LLM_SELECT,
+          system: wikiContext,
+          messages: conversationMessages,
+          disableThinking: this.plugin.settings.disableThinking,
+        });
+
+        if (this.aborted) {
+          cleanupTimer();
+          this.finishGeneration(texts as unknown as Record<string, string>);
+          return;
+        }
+
+        this.history.messages.push({
+          role: 'assistant',
+          content: response,
+          timestamp: Date.now()
+        });
+
+        this.renderMarkdownContent(response, contentDiv);
+        this.scrollToBottom();
+        cleanupTimer();
+      }
+
+    } catch (error) {
+      console.error('Query failed:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      contentDiv.createEl('p', {
+        text: texts.queryModalErrorPrefix + errorMsg,
+        cls: 'llm-wiki-query-error'
+      });
+      cleanupTimer();
+    }
+
+    // Add copy button to live response
+    const lastMsg = this.history.messages[this.history.messages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant' && messageDiv) {
+      contentDiv.setAttribute('data-raw-content', lastMsg.content);
+      this.addCopyButton(messageDiv, contentDiv);
+      messageDiv.removeClass('llm-wiki-query-response-live');
+    }
+
+    this.finishGeneration(texts as unknown as Record<string, string>);
+  }
+
+  stopGeneration() {
+    this.aborted = true;
+    this.pendingInput = this.inputArea.value;
+  }
+
+  private finishGeneration(texts: Record<string, string>) {
+    this.isStreaming = false;
+    this.currentResponseDiv = null;
+    this.sendBtn.removeClass('is-streaming');
+
+    // Restore pending input if user stopped generation
+    if (this.pendingInput) {
+      this.inputArea.value = this.pendingInput;
+      this.pendingInput = '';
+    }
+
+    const currentRounds = Math.floor(this.history.messages.length / 2);
+    const maxRounds = this.plugin.settings.maxConversationHistory;
+    this.historyCountDisplay.setText(
+      texts.queryModalHistoryCount
+        .replace('{}', currentRounds.toString())
+        .replace('{}', maxRounds.toString())
+    );
+  }
+
+  renderMarkdownContent(content: string, container: HTMLElement) {
+    container.empty();
+
+    // Dispose previous render component to avoid stale/orphaned components
+    if (this.activeRenderComponent) {
+      this.activeRenderComponent.unload();
+      this.activeRenderComponent = null;
+    }
+
+    this.activeRenderComponent = new Component();
+    this.activeRenderComponent.load();
+
+    const sourcePath = this.plugin.settings.wikiFolder;
+
+    void MarkdownRenderer.render(
+      this.app,
+      content,
+      container,
+      sourcePath,
+      this.activeRenderComponent
+    );
+
+    // Bind click handlers on wiki-links so they work inside the Modal.
+    // Obsidian's global delegated handler on document.body may not see
+    // events from Modal DOM, so we attach per-link listeners manually.
+    container.querySelectorAll('.internal-link').forEach(link => {
+      const el = link as HTMLAnchorElement;
+      const href = el.getAttribute('data-href') || el.getAttribute('href');
+      if (!href) return;
+
+      el.addEventListener('click', (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        void this.app.workspace.openLinkText(href, sourcePath);
+      });
+    });
+  }
+
+  scrollToBottom() {
+    this.historyContainer.scrollTop = this.historyContainer.scrollHeight;
+  }
+
+  renderHistoryMessage(role: 'user' | 'assistant', content: string) {
+
+    const messageDiv = this.historyContainer.createDiv({
+      cls: ['llm-wiki-query-message-wrapper', role === 'user' ? 'llm-wiki-query-message-user' : 'llm-wiki-query-message-assistant']
+    });
+
+    messageDiv.createDiv({
+      cls: 'llm-wiki-query-message-label',
+      text: role === 'user' ? '👤 You' : '🤖 Wiki'
+    });
+
+    const bodyDiv = messageDiv.createDiv({
+      cls: role === 'user' ? 'llm-wiki-query-message-body' : 'llm-wiki-query-message-body markdown-reading-view'
+    });
+
+    if (role === 'assistant') {
+      bodyDiv.setAttribute('data-raw-content', content);
+      this.renderMarkdownContent(content, bodyDiv);
+      this.addCopyButton(messageDiv, bodyDiv);
+    } else {
+      bodyDiv.setText(content);
+    }
+  }
+
+  private addCopyButton(messageWrapper: HTMLElement, bodyDiv: HTMLElement) {
+    const copyBtn = messageWrapper.createDiv({ cls: 'llm-wiki-query-copy-btn' });
+    setIcon(copyBtn, 'clipboard');
+    copyBtn.addEventListener('click', (evt) => {
+      evt.stopPropagation();
+      const raw = bodyDiv.getAttribute('data-raw-content') || '';
+      navigator.clipboard.writeText(raw).then(() => {
+        setIcon(copyBtn, 'check');
+        window.setTimeout(() => setIcon(copyBtn, 'clipboard'), 1500);
+      }).catch(() => {
+        setIcon(copyBtn, 'x-circle');
+        window.setTimeout(() => setIcon(copyBtn, 'clipboard'), 1500);
+      });
+    });
+  }
+
+  limitHistory() {
+    const max = this.plugin.settings.maxConversationHistory;
+    const totalMessages = this.history.messages.length;
+
+    if (totalMessages > max * 2) {
+      const keepCount = max * 2;
+      this.history.messages = this.history.messages.slice(-keepCount);
+
+      const texts = TEXTS[this.plugin.settings.language];
+      new Notice(
+        texts.historyTruncated.replace('{max}', String(max)),
+        3000
+      );
+
+      this.historyContainer.empty();
+      this.history.messages.forEach(msg => {
+        this.renderHistoryMessage(msg.role, msg.content);
+      });
+    }
+  }
+
+  async saveToWiki() {
+    if (this.history.messages.length === 0) return;
+
+    const texts = TEXTS[this.plugin.settings.language];
+    const progressNotice = new Notice(texts.savingToWiki, 0);
+
+    // Wire progress callback to update the sticky notice
+    const origProgress = this.plugin.wikiEngine.getProgressCallback();
+    this.plugin.wikiEngine.setProgressCallback((msg: string) => {
+      progressNotice.setMessage(msg);
+    });
+
+    try {
+      const report = await this.plugin.wikiEngine.ingestConversation(this.history);
+      this.plugin.settings.lastOfferedQueryHash = this.computeConversationHash();
+      void this.plugin.saveSettings();
+      const lang = this.plugin.settings.language;
+      const summary = lang === 'en'
+        ? `${report.entitiesCreated} entities, ${report.conceptsCreated} concepts, ${report.createdPages.length} pages`
+        : `${report.entitiesCreated} 实体, ${report.conceptsCreated} 概念, ${report.createdPages.length} 页`;
+      new Notice(`${texts.saveToWikiSuccess}\n${summary}`, NOTICE_NORMAL);
+    } catch (error) {
+      console.error('Save failed:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      const texts = TEXTS[this.plugin.settings.language];
+      new Notice(texts.queryModalErrorPrefix + errorMsg, NOTICE_ERROR);
+    } finally {
+      progressNotice.hide();
+      this.plugin.wikiEngine.setProgressCallback(origProgress);
+    }
+  }
+
+  clearHistory() {
+    this.history.messages = [];
+    this.historyContainer.empty();
+
+    this.plugin.settings.queryHistory = [];
+    void this.plugin.saveSettings();
+
+    const texts = TEXTS[this.plugin.settings.language];
+    new Notice(texts.historyCleared, NOTICE_BRIEF);
+
+    const maxRounds = this.plugin.settings.maxConversationHistory;
+    this.historyCountDisplay.setText(
+      texts.queryModalHistoryCount
+        .replace('{}', '0')
+        .replace('{}', maxRounds.toString())
+    );
+
+    // After clearing, the history is empty again — bring the empty state
+    // back so the panel doesn't show a blank history area.
+    ChatRenderer.renderEmptyState(this, this.historyContainer);
+  }
+
+  async buildWikiContext(userMessage: string, onProgress?: (phase: string) => void): Promise<string> {
+    console.debug('=== buildWikiContext started ===');
+    console.debug('User question:', userMessage);
+
+    const texts = TEXTS[this.plugin.settings.language];
+
+    try {
+      const indexPath = `${this.plugin.settings.wikiFolder}/index.md`;
+      console.debug('[Step 1] Index path:', indexPath);
+      const indexContent = await this.plugin.wikiEngine.tryReadFile(indexPath);
+      console.debug('[Step 1] Index content:', indexContent ? 'loaded' : 'not found');
+
+      if (!indexContent) {
+        console.debug('[Step 1] Wiki is empty, returning hint');
+        const lang = this.plugin.settings.wikiLanguage || 'en';
+        const langName = WIKI_LANGUAGES[lang] || lang;
+        return `IMPORTANT: You MUST write ALL responses in ${langName}.\n\nYou are a Wiki assistant. The Wiki is empty. Please answer based on your knowledge and suggest the user ingest sources first.`;
+      }
+
+      // Phase: Searching for relevant pages — Layer 1 local keyword match first
+      onProgress?.(texts.queryPhaseSearching);
+
+      let relevantPages: string[];
+
+      const allPages = parseIndexForPages(indexContent);
+      const localMatches = localKeywordMatch(userMessage, allPages);
+
+      // High confidence: 2+ keyword hits in titles and at least 3 matches
+      const highConfidence = localMatches.filter(p => p.score >= 6);
+      if (highConfidence.length >= 3) {
+        console.debug('[Step 2] Local keyword high-confidence match, skipping LLM selection:', highConfidence.length, 'pages');
+        relevantPages = highConfidence.slice(0, 5).map(p => p.path);
+      } else if (localMatches.length > 0) {
+        // Medium confidence: narrow candidates to top 15 then use LLM to refine
+        console.debug('[Step 2] Local keyword medium match, LLM refining from', localMatches.length, 'candidates');
+        const candidateList = localMatches.slice(0, 15).map(p =>
+          `- ${p.path} \`aliases: ${p.aliases.join(', ')}\``
+        ).join('\n');
+        relevantPages = await this.selectRelevantPagesWithLLM(userMessage, candidateList);
+      } else {
+        // No local match: fall back to full LLM scan of entire index
+        console.debug('[Step 2] No local keyword match, full LLM selection');
+        relevantPages = await this.selectRelevantPagesWithLLM(userMessage, indexContent);
+      }
+
+      // Phase: Found pages count with names
+      const pageNames = relevantPages.map(p => p.split('/').pop() || p).join(', ');
+      const foundText = texts.queryPhaseFoundPages
+        .replace('{count}', relevantPages.length.toString())
+        .replace('{pages}', pageNames);
+      onProgress?.(foundText);
+
+      // Phase: Loading pages
+      onProgress?.(texts.queryPhaseLoadingPages);
+
+      console.debug('[Step 3] Loading page content...');
+      const pagesContent = await this.loadRelevantPages(relevantPages);
+      console.debug('[Step 3] Pages loaded:', pagesContent.length);
+      pagesContent.forEach((content, i) => {
+        console.debug(`[Step 3] page content length:`, content.length);
+      });
+
+      // Phase: Context ready, about to generate
+      onProgress?.(texts.queryPhaseContextReady);
+
+      const lang = this.plugin.settings.wikiLanguage || 'en';
+      const langName = WIKI_LANGUAGES[lang] || lang;
+      const langDirective = `IMPORTANT: You MUST write ALL responses in ${langName}. Every answer, explanation, and label must be in ${langName}.`;
+      const wikiContext = `${langDirective}
+
+You are a Wiki assistant with access to a structured knowledge base.
+
+Wiki Index:
+${indexContent}
+
+Relevant Wiki Pages (loaded with full content):
+${pagesContent.length > 0 ? pagesContent.join('\n\n---\n\n') : 'No directly relevant pages found in Wiki.'}
+
+Instructions:
+- Answer based on the Wiki pages above (not general knowledge)
+- Use ONLY Obsidian's wiki-link syntax: [[${this.plugin.settings.wikiFolder}/entities/page-name]] (NOT HTML links)
+- Link format MUST include wiki folder: [[${this.plugin.settings.wikiFolder}/entities/page-name]]
+
+CRITICAL RULES:
+✅ CORRECT: [[${this.plugin.settings.wikiFolder}/entities/example-page]], [[${this.plugin.settings.wikiFolder}/concepts/example-concept]]
+❌ WRONG: <a href="...">, [link text](url), [[example-page]], [[entities/example-page]]
+- Obsidian wiki-links use DOUBLE brackets: [[path]]
+- NO HTML: Never use <a href="...">text</a>
+- NO Markdown external links: Never use [text](url)
+- Include ${this.plugin.settings.wikiFolder}/ prefix: Links must start with [[${this.plugin.settings.wikiFolder}/...
+
+CITATION REQUIREMENTS:
+- When referencing specific information from a Wiki page, include an inline wiki-link
+- At the end of your answer, add a "## References" section (or "## 参考文献" for Chinese) listing all wiki pages you cited
+- Format each reference as: [[${this.plugin.settings.wikiFolder}/path/page-name|Display Name]] — brief description
+- Example:
+  ## References
+  1. [[${this.plugin.settings.wikiFolder}/concepts/example-concept|Example Concept]] — Core mechanism explanation
+  2. [[${this.plugin.settings.wikiFolder}/entities/example-entity|Example Entity]] — Background and history
+
+If Wiki lacks relevant information:
+- Acknowledge it and suggest ingesting more sources
+- Do NOT make up information outside Wiki
+
+Respond in ${langName}`;
+
+      console.debug('[Step 4] Wiki context built');
+      console.debug('[Step 4] Context length:', wikiContext.length);
+      return wikiContext;
+    } catch (error) {
+      console.error('[Error] buildWikiContext failed:', error);
+      const lang2 = this.plugin.settings.wikiLanguage || 'en';
+      const langName2 = WIKI_LANGUAGES[lang2] || lang2;
+      return `IMPORTANT: You MUST write ALL responses in ${langName2}.\n\nYou are a Wiki assistant. Failed to load Wiki context. Please answer based on your knowledge.`;
+    }
+  }
+
+  async selectRelevantPagesWithLLM(query: string, indexContent: string): Promise<string[]> {
+    console.debug('=== LLM page selection started ===');
+
+    const prompt = `You are a Wiki page selector. Given a user query and the Wiki index, select the most relevant pages.
+
+User Query: "${query}"
+
+Wiki Index:
+${indexContent}
+
+Task:
+1. Read the Wiki index above
+2. Identify pages that are MOST relevant to the user's query
+3. Pay special attention to \`[aliases]\` in backtick-brackets after page names — these are alternative names, abbreviations, or translations. A user asking "DSA" may be referring to a page with alias "DSA" under a different title.
+4. Consider page titles, summaries, aliases, and semantic relevance
+5. Select top 3-5 most relevant pages
+
+Output Format (strict JSON):
+{
+  "relevant_pages": [
+    "entities/page-name-1",
+    "concepts/page-name-2",
+    "sources/page-name-3"
+  ]
+}
+
+Important:
+- Output ONLY the JSON object, no other text
+- Page paths should match the format in Wiki links: "entities/name", "concepts/name", "sources/name"
+- If no pages are relevant, output: {"relevant_pages": []}`;
+
+    try {
+      console.debug('[LLM] Sending selection request...');
+      const response = await this.plugin.llmClient!.createMessage({
+        model: this.plugin.settings.model,
+        max_tokens: TOKENS_QUERY_PAGE_SELECT,
+        messages: [{ role: 'user', content: prompt }],
+        response_format: { type: 'json_object' },
+      disableThinking: this.plugin.settings.disableThinking,
+    });
+
+      console.debug('[LLM] Raw response:', response);
+
+      const parsed = await parseJsonResponse(response) as { relevant_pages?: string[] } | null;
+      const pages = parsed?.relevant_pages || [];
+
+      console.debug('[Parse OK] Page list:', pages);
+      return pages;
+    } catch (error) {
+      console.error('[LLM selection failed]', error);
+      return [];
+    }
+  }
+
+  async loadRelevantPages(pageTitles: string[]): Promise<string[]> {
+    console.debug('=== loadRelevantPages started ===');
+    console.debug('Page titles:', pageTitles);
+
+    const pages: string[] = [];
+
+    const wikiPrefix = this.plugin.settings.wikiFolder + '/';
+
+    for (const title of pageTitles) {
+      console.debug(`[Load Page] Processing title: "${title}"`);
+
+      // Strip wiki folder prefix if LLM returned it (e.g., "wiki/entities/xxx" → "entities/xxx")
+      const normalizedTitle = title.startsWith(wikiPrefix) ? title.slice(wikiPrefix.length) : title;
+      const pagePath = `${this.plugin.settings.wikiFolder}/${normalizedTitle}.md`;
+
+      console.debug(`[Load Page] Full path: "${pagePath}"`);
+
+      const content = await this.plugin.wikiEngine.tryReadFile(pagePath);
+      console.debug(`[Load Page] File exists: ${content ? 'yes' : 'no'}`);
+
+      if (content) {
+        console.debug(`[Load Page] content length: ${content.length}`);
+        console.debug(`[Load Page] First 100 chars: ${content.substring(0, 100)}`);
+        const displayTitle = `${this.plugin.settings.wikiFolder}/${normalizedTitle}`;
+        let body = content;
+        if (body.length > MAX_PAGE_CONTENT_CHARS) {
+          body = body.substring(0, MAX_PAGE_CONTENT_CHARS) + '\n\n... (truncated)';
+          console.debug(`[Load Page] Truncated from ${content.length} to ${MAX_PAGE_CONTENT_CHARS} chars`);
+        }
+        pages.push(`## ${displayTitle}\n\n${body}`);
+      } else {
+        console.warn(`[Load Page] Cannot read page: ${pagePath}`);
+      }
+    }
+
+    console.debug(`[Load Page] Successfully loaded pages`);
+    return pages;
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "tianzhi-llm-wiki",
+  "version": "1.0.1",
+  "packageManager": "pnpm@10.14.0",
+  "description": "天智大模型Wiki - 多页知识库生成 + 对话式查询 + 侧边栏",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "dev:all": "run-p dev sync dev:tailwind",
+    "dev:tailwind": "node scripts/build-tailwind.mjs --watch",
+    "build": "node esbuild.config.mjs production && node scripts/build-tailwind.mjs",
+    "build:dev": "node esbuild.config.mjs dev && node scripts/build-tailwind.mjs",
+    "build:tailwind": "node scripts/build-tailwind.mjs",
+    "lint": "eslint src/ --max-warnings=0",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "sync": "node scripts/sync.mjs --watch",
+    "copy-once": "node scripts/sync.mjs"
+  },
+  "keywords": [
+    "obsidian",
+    "plugin",
+    "llm",
+    "wiki",
+    "tianzhi",
+    "knowledge-management",
+    "multi-page",
+    "conversational-query",
+    "streaming",
+    "sidebar"
+  ],
+  "author": "Tianzhi Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "16.18.126",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "8.59.1",
+    "@typescript-eslint/parser": "8.59.1",
+    "autoprefixer": "^10.5.0",
+    "esbuild": "0.28.0",
+    "eslint": "10.2.1",
+    "eslint-plugin-obsidianmd": "0.3.0",
+    "jsdom": "^29.1.1",
+    "npm-run-all2": "^7.0.2",
+    "obsidian": "1.12.3",
+    "postcss": "^8.5.15",
+    "tailwindcss": "3",
+    "tslib": "2.4.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "fast-uri": "3.1.2",
+      "brace-expansion": "5.0.6"
+    }
+  },
+  "dependencies": {
+    "@ant-design/cssinjs": "^2.1.2",
+    "antd": "^5.21.0",
+    "clsx": "^2.1.1",
+    "react": "18",
+    "react-dom": "18",
+    "tailwind-merge": "^3.6.0"
+  }
+}

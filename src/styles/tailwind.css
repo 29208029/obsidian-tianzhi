@@ -1,0 +1,5 @@
+/* Tailwind 入口 — 被打包后注入到 styles.css 的最前面 */
+/* 注意:preflight 已在 tailwind.config.js 禁用,这里直接 @tailwind components/utilities */
+
+@tailwind components;
+@tailwind utilities;

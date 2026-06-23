@@ -1,0 +1,10 @@
+{
+  "id": "tianzhi",
+  "name": "Tianzhi LLM Wiki",
+  "version": "1.0.1",
+  "minAppVersion": "1.11.0",
+  "isDesktopOnly": false,
+  "description": "天智大模型 Wiki 知识库插件 — 多页面知识生成,包含实体/概念页面和对话式查询。",
+  "author": "Tianzhi Team",
+  "authorUrl": "https://github.com/29208029/obsidian-tianzhi"
+}

@@ -1,0 +1,1129 @@
+// Wiki Engine — Core Wiki ingestion and management logic.
+// Orchestrates sub-modules: SourceAnalyzer, PageFactory, ConversationIngestor,
+// LintFixer, ContradictionManager, and system-prompts.
+
+import { App, TFile, TFolder, Notice, normalizePath } from 'obsidian';
+import {
+  LLMWikiSettings,
+  LLMClient,
+  SourceAnalysis,
+  ContradictionInfo,
+  IngestReport,
+  EngineContext,
+} from '../types';
+import { PROMPTS } from '../prompts';
+import { TEXTS } from '../texts';
+import {
+  slugify,
+  cleanMarkdownResponse,
+  parseFrontmatter,
+  detectRateLimitFailures,
+  formatRateLimitNotice,
+  getText,
+  extractSourceTags,
+} from '../utils';
+import { SchemaManager, SchemaTask } from '../schema/schema-manager';
+import {
+  buildSystemPrompt,
+  getSectionLabels,
+  applySectionLabels,
+} from './system-prompts';
+import {
+  LintFixer,
+  getExistingWikiPages,
+} from './lint-fixes';
+import { ContradictionManager } from './contradictions';
+import { fixPollutedSources } from '../core/sources-normalizer';
+import { UNIVERSAL_LINK_CONSTRAINTS } from './prompts/constraints';
+import { SourceAnalyzer } from './source-analyzer';
+import { TOKENS_PAGE_GENERATION, NOTICE_ABORT, NOTICE_RATE_LIMIT, NOTICE_NORMAL, PAGES_CACHE_TTL_MS } from '../constants';
+import { PageFactory } from './page-factory';
+import { ConversationIngestor, ConversationOrchestration, formatConversation, ConversationHistory } from './conversation-ingest';
+
+export class WikiEngine {
+  private app: App;
+  settings: LLMWikiSettings;
+  private llmClient: LLMClient | null;
+  private getLLMClient: () => LLMClient | null;
+  private schemaManager: SchemaManager;
+  private onFileWrite: ((path: string) => void) | null;
+  private onProgress: ((message: string) => void) | null;
+  private onDone: ((report: IngestReport) => void) | null;
+  private lintFixer: LintFixer;
+  private contradictionManager: ContradictionManager;
+  private sourceAnalyzer: SourceAnalyzer;
+  private pageFactory: PageFactory;
+  private conversationIngestor: ConversationIngestor;
+  private abortController: AbortController | null = null;
+  private lintAbortController: AbortController | null = null;
+  wasCancelled = false;
+  private onIngestionStart: (() => void) | null = null;
+  private onIngestionEnd: (() => void) | null = null;
+  private onLintStart: (() => void) | null = null;
+  private onLintEnd: (() => void) | null = null;
+  private onStatusBarUpdate: ((text: string) => void) | null = null;
+  private pagesCache: Array<{path: string; title: string; wikiLink: string; aliases?: string[]}> | null = null;
+  private pagesCacheTime = 0;
+  private readonly PAGES_CACHE_TTL_MS = PAGES_CACHE_TTL_MS;
+  private ctx: EngineContext;
+
+  constructor(
+    app: App,
+    settings: LLMWikiSettings,
+    getLLMClient: () => LLMClient | null,
+    schemaManager: SchemaManager,
+    onFileWrite?: (path: string) => void,
+    onProgress?: (message: string) => void,
+    onDone?: (report: IngestReport) => void
+  ) {
+    this.app = app;
+    this.settings = settings;
+    this.llmClient = null;
+    this.getLLMClient = getLLMClient;
+    this.schemaManager = schemaManager;
+    this.onFileWrite = onFileWrite || null;
+    this.onProgress = onProgress || null;
+    this.onDone = onDone || null;
+
+    const ctx: EngineContext = {
+      app: this.app,
+      settings: this.settings,
+      getClient: () => this.getLLMClient(),
+      createOrUpdateFile: (p, c) => this.createOrUpdateFile(p, c),
+      deleteFile: p => this.deleteFile(p),
+      tryReadFile: p => this.tryReadFile(p),
+      buildSystemPrompt: task =>
+        buildSystemPrompt(this.settings, t => this.schemaManager.getSchemaContext(t as SchemaTask), task),
+      getSectionLabels: () => getSectionLabels(this.settings),
+      getExistingWikiPages: () =>
+        getExistingWikiPages(this.app, this.settings.wikiFolder),
+      getSchemaContext: t => this.schemaManager.getSchemaContext(t as SchemaTask),
+      onFileWrite: path => this.onFileWrite?.(path),
+      onProgress: msg => this.notifyProgress(msg),
+      onDone: report => this.onDone?.(report),
+    };
+
+    this.ctx = ctx;
+    this.lintFixer = new LintFixer(ctx);
+    this.contradictionManager = new ContradictionManager(ctx);
+    this.sourceAnalyzer = new SourceAnalyzer(ctx);
+    this.pageFactory = new PageFactory(ctx);
+
+    const orch: ConversationOrchestration = {
+      ensureWikiStructure: () => this.ensureWikiStructure(),
+      apiDelay: ms => this.apiDelay(ms),
+      generateIndex: () => this.generateIndexFromEngine(),
+      updateLog: (op, analysis) => this.updateLog(op, analysis),
+    };
+    this.conversationIngestor = new ConversationIngestor(ctx, this.pageFactory, orch);
+  }
+
+  setFileWriteCallback(cb: (path: string) => void): void {
+    this.onFileWrite = cb;
+  }
+
+  setProgressCallback(cb: ((message: string) => void) | null): void {
+    this.onProgress = cb;
+  }
+
+  getProgressCallback(): ((message: string) => void) | null {
+    return this.onProgress;
+  }
+
+  setStatusBarUpdateCallback(cb: ((text: string) => void) | null): void {
+    this.onStatusBarUpdate = cb;
+  }
+
+  updateStatusBar(text: string): void {
+    this.onStatusBarUpdate?.(text);
+  }
+
+  private notifyProgress(msg: string): void {
+    this.onProgress?.(msg);
+    this.updateStatusBar(msg);
+  }
+
+  setDoneCallback(cb: ((report: IngestReport) => void) | null): void {
+    this.onDone = cb;
+  }
+
+  setIngestionCallbacks(onStart: (() => void) | null, onEnd: (() => void) | null): void {
+    this.onIngestionStart = onStart;
+    this.onIngestionEnd = onEnd;
+  }
+
+  setLintCallbacks(onStart: (() => void) | null, onEnd: (() => void) | null): void {
+    this.onLintStart = onStart;
+    this.onLintEnd = onEnd;
+  }
+
+  cancelIngestion(): void {
+    if (this.abortController) {
+      this.abortController.abort();
+      const msg = getText(this.settings.language, 'ingestionCancelling');
+      new Notice(msg, NOTICE_ABORT);
+      this.onProgress?.(msg);
+      console.debug('Ingestion cancellation requested');
+    }
+  }
+
+  isIngesting(): boolean {
+    return this.abortController !== null;
+  }
+
+  startLintOperation(): AbortSignal {
+    this.lintAbortController = new AbortController();
+    this.onLintStart?.();
+    return this.lintAbortController.signal;
+  }
+
+  cancelLint(): void {
+    if (this.lintAbortController) {
+      this.lintAbortController.abort();
+      const msg = getText(this.settings.language, 'ingestionCancelling');
+      new Notice(msg, NOTICE_ABORT);
+      console.debug('[lint] cancellation requested');
+    }
+  }
+
+  isLintRunning(): boolean {
+    return this.lintAbortController !== null;
+  }
+
+  endLintOperation(): void {
+    if (this.lintAbortController === null) return;
+    this.lintAbortController = null;
+    this.onLintEnd?.();
+  }
+
+  private checkCancelled(): void {
+    if (this.abortController?.signal.aborted) {
+      throw new DOMException('Ingestion cancelled by user', 'AbortError');
+    }
+  }
+
+  // Proxy for lint-controller to access LintFixer methods without exposing the class
+  async fixPollutedPage(oldPath: string, newBasename: string): Promise<string> {
+    return this.lintFixer.fixPollutedPage(oldPath, newBasename);
+  }
+
+  private get client(): LLMClient {
+    const c = this.getLLMClient();
+    if (!c) throw new Error('LLM Client not initialized');
+    return c;
+  }
+
+  private async buildSystemPrompt(task: SchemaTask): Promise<string | undefined> {
+    return buildSystemPrompt(this.settings, t => this.schemaManager.getSchemaContext(t as SchemaTask), task);
+  }
+
+  private applySectionLabels(prompt: string): string {
+    return applySectionLabels(prompt, this.settings);
+  }
+
+  updateSettings(settings: LLMWikiSettings): void {
+    this.settings = settings;
+    this.ctx.settings = settings;
+  }
+
+  async ingestSource(file: TFile) {
+    console.debug('=== Ingestion started ===');
+    console.debug('Source file:', file.path);
+    const totalStartTime = Date.now();
+
+    // Setup cancellation support
+    this.wasCancelled = false;
+    this.abortController = new AbortController();
+    this.onIngestionStart?.();
+
+    // Long-source warning: read file early to estimate processing time.
+    // Large files trigger iterative batch extraction (multiple LLM passes),
+    // which takes significantly longer than single-pass small files.
+    const LONG_SOURCE_LINE_THRESHOLD = 1000;
+    const fileContent = await this.app.vault.read(file);
+    const lineCount = fileContent.split('\n').length;
+    if (lineCount > LONG_SOURCE_LINE_THRESHOLD) {
+      const sizeKB = Math.round(fileContent.length / 1024);
+      new Notice(
+        getText(this.settings.language, 'longSourceNotice')
+          .replace('{filename}', file.basename)
+          .replace('{lines}', String(lineCount))
+          .replace('{size}', sizeKB >= 1024 ? `${(sizeKB / 1024).toFixed(1)}MB` : `${sizeKB}KB`),
+        NOTICE_NORMAL
+      );
+      console.debug(`[Long Source] ${file.basename}: ${lineCount} lines, ${sizeKB}KB — long ingestion expected`);
+    }
+
+    this.onProgress?.(getText(this.settings.language, 'wikiAnalyzing')
+      .replace('{}', file.basename));
+
+    const failedItems: Array<{ type: 'entity' | 'concept'; name: string; reason: string }> = [];
+    const collisions: Array<{ name: string; sourceType: 'entity' | 'concept'; targetType: 'entity' | 'concept'; targetPath: string }> = [];
+    let analysis: SourceAnalysis | null = null;
+
+    try {
+      await this.ensureWikiStructure();
+
+      // Stage 1: Source Analysis
+      const analysisStart = Date.now();
+      analysis = await this.sourceAnalyzer.analyzeSource(file);
+      if (!analysis) {
+        throw new Error(`Source analysis failed for "${file.basename}". Check the developer console (Ctrl+Shift+I) for network or API errors. If you see SSL/network errors, verify your provider URL and network connection.`);
+      }
+      const analysisTime = Date.now() - analysisStart;
+      console.debug(`[Time] Source analysis phase: ${analysisTime}ms`);
+      console.debug('Analysis result:', JSON.stringify(analysis, null, 2));
+
+      this.checkCancelled();
+
+      const totalSteps = 1 + analysis.entities.length + analysis.concepts.length + analysis.related_pages.length + 2;
+      let step = 1;
+
+      const plannedPaths: string[] = [];
+      const preserveCase = this.settings.slugCase === 'preserve';
+      for (const entity of analysis.entities) {
+        plannedPaths.push(normalizePath(`${this.settings.wikiFolder}/entities/${slugify(entity.name, preserveCase)}.md`));
+      }
+      for (const concept of analysis.concepts) {
+        plannedPaths.push(normalizePath(`${this.settings.wikiFolder}/concepts/${slugify(concept.name, preserveCase)}.md`));
+      }
+
+      this.onProgress?.(getText(this.settings.language, 'wikiProgressStep')
+        .replace('{current}', String(step))
+        .replace('{total}', String(totalSteps))
+        .replace('{}', getText(this.settings.language, 'wikiCreatingSummary')));
+      await this.apiDelay();
+
+      // Stage 2: Summary Page Generation
+      const summaryStart = Date.now();
+      const summaryPage = await this.createSummaryPage(file, analysis, plannedPaths);
+      const summaryTime = Date.now() - summaryStart;
+      console.debug(`[Time] Summary page generation: ${summaryTime}ms`);
+      analysis.created_pages.push(summaryPage);
+
+      // Stage 3: Entity/Concept Page Generation
+      const pageGenStart = Date.now();
+      let pageGenCount = 0;
+
+      // Phase 2: Parallel page generation with concurrency control
+      const concurrency = this.settings.pageGenerationConcurrency ?? 1;
+      const batchDelay = this.settings.batchDelayMs ?? 300;
+
+      // Log parallel mode info
+      if (concurrency > 1) {
+        console.debug(`[Parallel] concurrency: ${concurrency}, batch delay: ${batchDelay}ms, total tasks: ${analysis.entities.length + analysis.concepts.length}`);
+      } else {
+        console.debug(`[Serial] generating pages sequentially, total tasks: ${analysis.entities.length + analysis.concepts.length}`);
+      }
+
+      // Prepare all page generation tasks
+      type PageGenTask = {
+        type: 'entity' | 'concept';
+        name: string;
+        index: number;
+      };
+
+      const tasks: PageGenTask[] = [
+        ...analysis.entities.map((e, i) => ({ type: 'entity' as const, name: e.name, index: i })),
+        ...analysis.concepts.map((c, i) => ({ type: 'concept' as const, name: c.name, index: i }))
+      ];
+
+      // Process in batches based on concurrency setting
+      for (let i = 0; i < tasks.length; i += concurrency) {
+        this.checkCancelled();
+        const batch = tasks.slice(i, i + concurrency);
+
+        // Execute batch with Promise.allSettled for error isolation
+        const batchResults = await Promise.allSettled(
+          batch.map(async (task) => {
+            step++;
+            this.onProgress?.(getText(this.settings.language, 'wikiProgressStep')
+              .replace('{current}', String(step))
+              .replace('{total}', String(totalSteps))
+              .replace('{}', getText(this.settings.language, 'wikiEntityOrConcept')
+                .replace('{}', getText(this.settings.language,
+                  task.type === 'entity' ? 'wikiEntityLabel' : 'wikiConceptLabel'))
+                .replace('{}', task.name)));
+
+            if (task.type === 'entity') {
+              const entity = analysis!.entities[task.index];
+              try {
+                const entityResult = await this.pageFactory.createOrUpdateEntityPage(entity, analysis!, file);
+                if (entityResult.path) {
+                  analysis!.created_pages.push(entityResult.path);
+                }
+                if (entityResult.collision) {
+                  collisions.push(entityResult.collision);
+                  console.debug(`Entity "${entity.name}" → collision with ${entityResult.collision.targetType}`);
+                }
+                return { success: true as const, name: entity.name, type: 'entity' as const, collision: entityResult.collision };
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                console.error(`Entity "${entity.name}" failed:`, reason);
+                failedItems.push({ type: 'entity', name: entity.name, reason });
+
+                // Retry once
+                try {
+                  await this.apiDelay(2000);
+                  const retryResult = await this.pageFactory.createOrUpdateEntityPage(entity, analysis!, file);
+                  if (retryResult.path) {
+                    analysis!.created_pages.push(retryResult.path);
+                    console.debug(`Entity "${entity.name}" recovered on retry`);
+                    failedItems.pop();
+                  }
+                  if (retryResult.collision) {
+                    collisions.push(retryResult.collision);
+                  }
+                } catch {
+                  console.error(`Entity "${entity.name}" retry also failed`);
+                }
+                return { success: false as const, name: entity.name, type: 'entity' as const, reason };
+              }
+            } else {
+              const concept = analysis!.concepts[task.index];
+              try {
+                const conceptResult = await this.pageFactory.createOrUpdateConceptPage(concept, analysis!, file);
+                if (conceptResult.path) {
+                  analysis!.created_pages.push(conceptResult.path);
+                }
+                if (conceptResult.collision) {
+                  collisions.push(conceptResult.collision);
+                  console.debug(`Concept "${concept.name}" → collision with ${conceptResult.collision.targetType}`);
+                }
+                return { success: true as const, name: concept.name, type: 'concept' as const, collision: conceptResult.collision };
+              } catch (error) {
+                const reason = error instanceof Error ? error.message : String(error);
+                console.error(`Concept "${concept.name}" failed:`, reason);
+                failedItems.push({ type: 'concept', name: concept.name, reason });
+
+                // Retry once
+                try {
+                  await this.apiDelay(2000);
+                  const retryResult = await this.pageFactory.createOrUpdateConceptPage(concept, analysis!, file);
+                  if (retryResult.path) {
+                    analysis!.created_pages.push(retryResult.path);
+                    console.debug(`Concept "${concept.name}" recovered on retry`);
+                    failedItems.pop();
+                  }
+                  if (retryResult.collision) {
+                    collisions.push(retryResult.collision);
+                  }
+                } catch {
+                  console.error(`Concept "${concept.name}" retry also failed`);
+                }
+                return { success: false as const, name: concept.name, type: 'concept' as const, reason };
+              }
+            }
+          })
+        );
+
+        // Log batch summary
+        pageGenCount += batch.length;
+        const batchNum = Math.floor(i / concurrency) + 1;
+        const totalBatches = Math.ceil(tasks.length / concurrency);
+        const succeeded = batchResults.filter(r => r.status === 'fulfilled' && r.value.success).length;
+        const mode = concurrency > 1 ? 'parallel' : 'serial';
+        const batchTime = Date.now() - pageGenStart;
+        console.debug(`[${mode}batch ${batchNum}/${totalBatches}] ${succeeded}/${batch.length}  pages succeeded (concurrency: ${concurrency}, cumulative: ${batchTime}ms)`);
+
+        // API rate limit protection: delay between batches if there are more tasks
+        if (i + concurrency < tasks.length) {
+          await this.apiDelay(batchDelay);
+        }
+      }
+      const pageGenTime = Date.now() - pageGenStart;
+      console.debug(`[Time] Page generation phase complete: ${pageGenTime}ms (avg ${Math.round(pageGenTime / pageGenCount)}ms/page)`);
+
+      // Rate-limit detection: check if parallel failures are 429-related
+      const pageGenRateInfo = detectRateLimitFailures(
+        failedItems.filter(f => f.type === 'entity' || f.type === 'concept'),
+        concurrency, batchDelay
+      );
+      if (pageGenRateInfo) {
+        console.warn(`[Rate Limit] Page generation: ${pageGenRateInfo.count} item(s) failed with 429, ` +
+          `suggested concurrency=${pageGenRateInfo.suggestedConcurrency}, delay=${pageGenRateInfo.suggestedDelay}ms`);
+        new Notice(formatRateLimitNotice(pageGenRateInfo, this.settings.language), NOTICE_RATE_LIMIT);
+      }
+
+      // Stage 4: Related Pages Update
+      const relatedStart = Date.now();
+      const relatedConcurrency = this.settings.pageGenerationConcurrency ?? 1;
+      const relatedDelay = this.settings.batchDelayMs ?? 300;
+
+      // Prepare related page tasks
+      const relatedTasks = analysis.related_pages.map((name, idx) => ({
+        name,
+        index: idx,
+        stepNum: step + idx + 1  // compute per-task step number
+      }));
+
+      let relatedCount = 0;
+      const relatedTotal = relatedTasks.length;
+      const relatedFailures: Array<{ name: string; reason: string }> = [];
+
+      // Process in parallel batches
+      for (let i = 0; i < relatedTasks.length; i += relatedConcurrency) {
+        this.checkCancelled();
+        const batch = relatedTasks.slice(i, i + relatedConcurrency);
+
+        // Execute batch updates in parallel
+        const batchResults = await Promise.allSettled(
+          batch.map(async (task) => {
+            this.onProgress?.(getText(this.settings.language, 'wikiProgressStep')
+              .replace('{current}', String(task.stepNum))
+              .replace('{total}', String(totalSteps))
+              .replace('{}', getText(this.settings.language, 'wikiUpdating')
+                .replace('{}', task.name)));
+
+            try {
+              const updated = await this.pageFactory.updateRelatedPage(task.name, analysis!, file);
+              return { success: updated, name: task.name };
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error);
+              console.error(`Related page "${task.name}" update failed:`, reason);
+
+              // Retry once (same pattern as page generation)
+              try {
+                await this.apiDelay(2000);
+                const updated = await this.pageFactory.updateRelatedPage(task.name, analysis!, file);
+                console.debug(`Related page "${task.name}" recovered on retry`);
+                return { success: updated, name: task.name };
+              } catch {
+                console.error(`Related page "${task.name}" retry also failed`);
+                return { success: false as const, name: task.name, reason };
+              }
+            }
+          })
+        );
+
+        // Collect successful results
+        batchResults.forEach((r, idx) => {
+          if (r.status === 'fulfilled' && r.value.success) {
+            analysis!.updated_pages.push(batch[idx].name);
+            relatedCount++;
+          } else {
+            const reason = r.status === 'fulfilled' ? (r.value as { reason?: string }).reason || 'unknown' :
+              r.reason instanceof Error ? r.reason.message : String(r.reason || 'unknown');
+            const name = batch[idx].name;
+            relatedFailures.push({ name, reason });
+            console.error(`[Related Page] "${name}" failed: ${reason}`);
+          }
+        });
+
+        // Delay between batches (except last)
+        if (i + relatedConcurrency < relatedTasks.length) {
+          await this.apiDelay(relatedDelay);
+        }
+      }
+
+      const relatedTime = Date.now() - relatedStart;
+      const relatedModeLabel = relatedConcurrency > 1 ? `parallel(concurrency:${relatedConcurrency})` : 'serial';
+      console.debug(`[Time] Related page update phase complete: ${relatedTime}ms (${relatedModeLabel}, ${relatedCount}/${relatedTotal}  pages succeeded)`);
+      step += relatedTotal;
+
+      // Rate-limit detection for related page updates
+      const relatedRateInfo = detectRateLimitFailures(
+        relatedFailures,
+        relatedConcurrency, relatedDelay
+      );
+      if (relatedRateInfo) {
+        console.warn(`[Rate Limit] Related pages update: ${relatedRateInfo.count} item(s) failed with 429, ` +
+          `suggested concurrency=${relatedRateInfo.suggestedConcurrency}, delay=${relatedRateInfo.suggestedDelay}ms`);
+        new Notice(formatRateLimitNotice(relatedRateInfo, this.settings.language), NOTICE_RATE_LIMIT);
+      }  // update step count for subsequent phase numbering
+
+      // Stage 5: Contradiction Recording
+      const contradictionStart = Date.now();
+      for (const contradiction of analysis.contradictions) {
+        try {
+          await this.noteContradiction(contradiction);
+        } catch {
+          // non-critical
+        }
+      }
+      const contradictionTime = Date.now() - contradictionStart;
+      console.debug(`[Time] Contradiction recording phase: ${contradictionTime}ms (${analysis.contradictions.length} items)`);
+
+      // Stage 6: Index & Log Update
+      const indexStart = Date.now();
+      step++;
+      this.onProgress?.(getText(this.settings.language, 'wikiProgressStep')
+        .replace('{current}', String(step))
+        .replace('{total}', String(totalSteps))
+        .replace('{}', getText(this.settings.language, 'wikiGeneratingIndex')));
+      await this.generateIndexFromEngine();
+      await this.updateLog('ingest', analysis);
+      const indexTime = Date.now() - indexStart;
+      console.debug(`[Time] Index Index & log update: ${indexTime}ms`);
+
+      const created = analysis.created_pages.length;
+      const updated = analysis.updated_pages.length;
+      const entitiesCreated = analysis.created_pages.filter(p => p.includes('/entities/')).length;
+      const conceptsCreated = analysis.created_pages.filter(p => p.includes('/concepts/')).length;
+      const modeLabel = (this.settings.pageGenerationConcurrency ?? 1) > 1 ? `parallel(concurrency:${this.settings.pageGenerationConcurrency})` : 'serial';
+      const totalTime = Date.now() - totalStartTime;
+
+      console.debug('=== Ingestion complete ===');
+      console.debug(`Ingestion complete [${modeLabel}]: Created ${created} pages (${entitiesCreated} entities + ${conceptsCreated} concepts), Updated ${updated} pages, ${collisions.length} cross-type collisions`);
+      console.debug(`[Total time] ${totalTime}ms (${Math.round(totalTime/1000)}s)`);
+      console.debug('[Phase breakdown]:');
+      console.debug(`  - Source analysis: ${analysisTime}ms`);
+      console.debug(`  - Summary page generation: ${summaryTime}ms`);
+      console.debug(`  - Page gen (${concurrency}concurrency): ${pageGenTime}ms`);
+      console.debug(`  - Related page update: ${relatedTime}ms`);
+      console.debug(`  - Contradiction recording: ${contradictionTime}ms`);
+      console.debug(`  - Index & log: ${indexTime}ms`);
+
+      // Show collision notice if any occurred
+      if (collisions.length > 0) {
+        new Notice(getText(this.settings.language, 'crossTypeCollisionNotice')
+          .replace('{count}', String(collisions.length)), NOTICE_NORMAL);
+      }
+
+      this.onDone?.({
+        sourceFile: file.path,
+        createdPages: analysis.created_pages,
+        updatedPages: analysis.updated_pages,
+        entitiesCreated,
+        conceptsCreated,
+        failedItems,
+        collisions,
+        contradictionsFound: analysis.contradictions.length,
+        success: true,
+        elapsedSeconds: Math.round(totalTime / 1000)
+      });
+
+    } catch (error) {
+      const createdPages = analysis?.created_pages || [];
+
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        this.wasCancelled = true;
+        console.debug('=== Ingestion cancelled by user ===');
+        new Notice(getText(this.settings.language, 'ingestionCancelled'), NOTICE_NORMAL);
+        this.onDone?.({
+          sourceFile: file.path,
+          createdPages,
+          updatedPages: analysis?.updated_pages || [],
+          entitiesCreated: createdPages.filter(p => p.includes('/entities/')).length,
+          conceptsCreated: createdPages.filter(p => p.includes('/concepts/')).length,
+          failedItems,
+          collisions,
+          contradictionsFound: analysis?.contradictions?.length || 0,
+          success: false,
+          cancelled: true,
+          errorMessage: 'Cancelled by user',
+          elapsedSeconds: Math.round((Date.now() - totalStartTime) / 1000)
+        });
+        return;
+      }
+
+      console.error('=== Ingestion failed ===');
+      console.error('Error:', error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+
+      this.onDone?.({
+        sourceFile: file.path,
+        createdPages,
+        updatedPages: analysis?.updated_pages || [],
+        entitiesCreated: createdPages.filter(p => p.includes('/entities/')).length,
+        conceptsCreated: createdPages.filter(p => p.includes('/concepts/')).length,
+        failedItems,
+        collisions,
+        contradictionsFound: analysis?.contradictions?.length || 0,
+        success: false,
+        errorMessage: errorMsg,
+        elapsedSeconds: Math.round((Date.now() - totalStartTime) / 1000)
+      });
+      throw error;
+    } finally {
+      this.abortController = null;
+      this.onIngestionEnd?.();
+    }
+  }
+
+  private async apiDelay(ms?: number): Promise<void> {
+    await new Promise(resolve => window.setTimeout(resolve, ms || 300));
+  }
+
+  async ensureWikiStructure() {
+    const folders = [
+      normalizePath(this.settings.wikiFolder),
+      normalizePath(`${this.settings.wikiFolder}/entities`),
+      normalizePath(`${this.settings.wikiFolder}/concepts`),
+      normalizePath(`${this.settings.wikiFolder}/sources`)
+    ];
+
+    for (const folder of folders) {
+      try {
+        await this.app.vault.createFolder(folder);
+        console.debug('Creating folder:', folder);
+      } catch {
+        // Folder already exists
+      }
+    }
+
+    await this.schemaManager.ensureSchemaExists();
+  }
+
+  async createSummaryPage(file: TFile, analysis: SourceAnalysis, plannedPaths: string[] = []): Promise<string> {
+    const preserveCase = this.settings.slugCase === 'preserve';
+    const slug = slugify(file.basename, preserveCase);
+    const path = normalizePath(`${this.settings.wikiFolder}/sources/${slug}.md`);
+    const content = await this.app.vault.read(file);
+
+    // Issue #114: if the source page already exists with manually-set tags,
+    // preserve them — re-ingesting a note must not overwrite corrections.
+    // Priority: existing source-page tags > source-note tags > LLM concept names.
+    const existingSource = await this.tryReadFile(path);
+    const existingFm = existingSource ? parseFrontmatter(existingSource) : null;
+    const existingTags = Array.isArray(existingFm?.tags) && existingFm.tags.length > 0
+      ? existingFm.tags
+      : null;
+
+    // Issue #90: inherit tags from source note frontmatter when available,
+    // so the generated summary page doesn't pollute the tag vocabulary with
+    // LLM-derived concept names. Fallback to LLM-derived tags if source has none.
+    const sourceTags = extractSourceTags(content);
+    const tagsValue = existingTags
+      ? existingTags.join(', ')
+      : sourceTags.length > 0
+        ? sourceTags.join(', ')
+        : analysis.concepts.map(c => c.name).join(', ');
+
+    const createdPagesList = plannedPaths.length > 0
+      ? plannedPaths.map(p => {
+          const relPath = p.replace(this.settings.wikiFolder + '/', '').replace('.md', '');
+          const name = relPath.split('/').pop() || relPath;
+          return `- [[${relPath}|${name}]]`;
+        }).join('\n')
+      : analysis.entities.map(e => `- [[entities/${slugify(e.name, preserveCase)}|${e.name}]]`).join('\n') +
+        '\n' +
+        analysis.concepts.map(c => `- [[concepts/${slugify(c.name, preserveCase)}|${c.name}]]`).join('\n');
+
+    const prompt = PROMPTS.generateSummaryPage
+      .replace('{{source_title}}', analysis.source_title)
+      .replace('{{content}}', content.substring(0, 500))
+      .replace('{{analysis}}', JSON.stringify(analysis))
+      .replace('{{created_pages_list}}', createdPagesList || '(none)')
+      .replace(/{{source_file}}/g, file.path)
+      .replace(/{{date}}/g, new Date().toISOString().split('T')[0])
+      .replace('{{tags}}', tagsValue)
+      .replace('{{constraints}}', UNIVERSAL_LINK_CONSTRAINTS);
+
+    const finalPrompt = this.applySectionLabels(prompt);
+
+    const pageContent = await this.client.createMessage({
+      model: this.settings.model,
+      max_tokens: TOKENS_PAGE_GENERATION,
+      system: await this.buildSystemPrompt('summary'),
+      messages: [{ role: 'user', content: finalPrompt }],
+      disableThinking: this.settings.disableThinking,
+    });
+
+    const cleanedContent = cleanMarkdownResponse(pageContent);
+    await this.createOrUpdateFile(path, cleanedContent);
+    return path;
+  }
+
+  async createOrUpdateFile(path: string, content: string): Promise<void> {
+    console.debug('createOrUpdateFile:', path);
+
+    // Central pollution detection: strip folder-prefix duplication from wiki-links
+    // before writing. This catches pollution from ALL sources (page generation,
+    // stub expansion, dead link fixes, merges, etc.).
+    //
+    // Pattern A: display-name pollution — [[entities/X|entities/Y]]
+    //   e.g. [[entities/Qwen|entities/Qwen]] → [[entities/Qwen|Qwen]]
+    const DISPLAY_POLLUTION_REGEX = /\[\[(entities|concepts|sources)\/([^|\]]+)\|(entities|concepts|sources)\/([^|\]]+)\]\]/g;
+    if (DISPLAY_POLLUTION_REGEX.test(content)) {
+      console.warn(
+        `createOrUpdateFile: detected display-name pollution in ${path}, auto-correcting`
+      );
+      content = content.replace(
+        DISPLAY_POLLUTION_REGEX,
+        (_match: string, _folder: string, _path: string, _dupFolder: string, display: string) => {
+          return `[[${_folder}/${_path}|${display}]]`;
+        }
+      );
+    }
+
+    // Pattern B: path-prefix duplication — [[X/Xname|name]]
+    //   e.g. [[concepts/concepts布局优化|布局优化]] → [[concepts/布局优化|布局优化]]
+    //   The folder prefix is duplicated in the path portion, directly before
+    //   the page name with no separator (CJK char, letter, etc.).
+    //   Safe: [[concepts/concepts-of-ML|...]] — '-' separator indicates legitimate slug.
+    const PATH_DUP_REGEX = /\[\[(entities|concepts|sources)\/\1([^\s\-_|\]]+)(\|[^\]]+)?\]\]/g;
+    if (PATH_DUP_REGEX.test(content)) {
+      console.warn(
+        `createOrUpdateFile: detected path-prefix pollution in ${path}, auto-correcting`
+      );
+      content = content.replace(
+        PATH_DUP_REGEX,
+        (_match: string, folder: string, rest: string, display: string | undefined) => {
+          const displayPart = display || '';
+          return `[[${folder}/${rest}${displayPart}]]`;
+        }
+      );
+    }
+
+    // Issue #125: normalize the `sources:` frontmatter field on every write.
+    // The LLM emits raw note paths ("[[Notizen/Autonome Dysregulation.md]]"),
+    // `.md` extensions, `|alias` pipes, and space/paren-containing titles. Left
+    // unfixed these become dead links that previously required a post-ingest
+    // cleanup script. normalizeSourcesField (Issue #81) already exists and is
+    // unit-tested but was only wired into the lint/auto-maintain paths — not the
+    // generation/merge write path that produces this pollution in the first place.
+    const preserveCase = this.settings.slugCase === 'preserve';
+    const sourcesFix = fixPollutedSources(content, this.settings.wikiFolder, preserveCase);
+    if (sourcesFix.fixed > 0) {
+      console.warn(`createOrUpdateFile: normalized polluted sources field in ${path}`);
+      content = sourcesFix.content;
+    }
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          console.debug(`Attempt ${attempt + 1}: File exists, updating:`, path);
+          await this.app.vault.process(file, () => content);
+          console.debug('Update success:', path);
+          this.onFileWrite?.(path);
+          this.pagesCache = null;
+          return;
+        } else {
+          console.debug(`Attempt ${attempt + 1}: File not found, creating:`, path);
+          await this.app.vault.create(path, content);
+          console.debug('Create success:', path);
+          this.onFileWrite?.(path);
+          this.pagesCache = null;
+          return;
+        }
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        console.error(`Attempt ${attempt + 1} failed:`, errorMsg);
+
+        if (errorMsg.includes('File already exists') || errorMsg.includes('already exists')) {
+          // macOS Unicode normalization: getAbstractFileByPath returned null
+          // but vault.create detected the file (NFC vs NFD mismatch).
+          // Fall back to parent-directory listing to resolve the actual TFile.
+          let resolved = this.resolveFileInVault(path);
+          if (!resolved) {
+            const normalized = path.normalize();
+            const allFiles = this.app.vault.getMarkdownFiles();
+            resolved = allFiles.find(f => f.path.normalize() === normalized) || null;
+            if (resolved) console.debug('Retry found file via full scan:', path);
+          }
+          if (resolved instanceof TFile) {
+            await this.app.vault.process(resolved, () => content);
+            console.debug('Update succeeded after file resolution:', path);
+            this.onFileWrite?.(path);
+            this.pagesCache = null;
+            return;
+          }
+          console.debug('File exists anomaly, retrying after 100ms:', path);
+          await new Promise(resolve => window.setTimeout(resolve, 100));
+          continue;
+        } else {
+          console.error('Unhandled error:', path, error);
+          throw error;
+        }
+      }
+    }
+
+    // Final fallback: try directory listing + full markdown scan
+    console.debug('3attempts exhausted, searching directory listing:', path);
+    let file = this.resolveFileInVault(path);
+    if (!file) {
+      // Belt-and-suspenders: scan getMarkdownFiles() (same source of truth as lint)
+      const normalized = path.normalize();
+      const allFiles = this.app.vault.getMarkdownFiles();
+      file = allFiles.find(f => f.path.normalize() === normalized) || null;
+      if (file) console.debug('createOrUpdateFile: resolved via full scan:', path);
+    }
+    if (file) {
+      await this.app.vault.process(file, () => content);
+      console.debug('Final update succeeded:', path);
+      this.onFileWrite?.(path);
+      this.pagesCache = null;
+    } else {
+      throw new Error(`无法创建或更新文件: ${path}`);
+    }
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) {
+      await this.app.fileManager.trashFile(file);
+      this.pagesCache = null;
+      console.debug('deleteFile:', path);
+    }
+  }
+
+  /** Resolve a vault path to TFile by listing parent directory children.
+   *  macOS APFS stores filenames in NFD; JavaScript strings are NFC.
+   *  When getAbstractFileByPath can't find a file that vault.create
+   *  detected as existing, this fallback resolves the mismatch.
+   *  Uses Unicode normalization so Chinese filenames compare correctly. */
+  private resolveFileInVault(path: string): TFile | null {
+    const lastSep = path.lastIndexOf('/');
+    if (lastSep === -1) return null;
+    const dirPath = path.substring(0, lastSep);
+    const baseName = path.substring(lastSep + 1).normalize();
+
+    const dir = this.app.vault.getAbstractFileByPath(dirPath);
+    if (dir && dir instanceof TFolder) {
+      for (const child of dir.children) {
+        if (child instanceof TFile && child.name.normalize() === baseName) {
+          return child;
+        }
+      }
+    }
+    return null;
+  }
+
+  async tryReadFile(path: string): Promise<string | null> {
+    // Resolve the file using all available strategies.
+    // On macOS APFS, filenames are stored in NFD while JavaScript uses NFC,
+    // so getAbstractFileByPath may miss files with non-ASCII names.
+    let file: TFile | null = null;
+
+    try {
+      const direct = this.app.vault.getAbstractFileByPath(path);
+      if (direct instanceof TFile) file = direct;
+    } catch {
+      // getAbstractFileByPath can throw on malformed paths; ignore and try fallbacks
+    }
+
+    if (!file) {
+      file = this.resolveFileInVault(path);
+    }
+
+    if (!file) {
+      const normalized = path.normalize();
+      const allFiles = this.app.vault.getMarkdownFiles();
+      const matched = allFiles.find(f => f.path.normalize() === normalized);
+      if (matched) {
+        console.debug('tryReadFile: resolved via full scan:', path);
+        file = matched;
+      }
+    }
+
+    if (!file) {
+      console.debug('tryReadFile: all lookups failed for:', path);
+      return null;
+    }
+
+    // vault.read() exceptions are NOT caught — a file that exists but can't
+    // be read is a real error, not a "file not found" condition.
+    return await this.app.vault.read(file);
+  }
+
+  async regenerateDefaultSchema(): Promise<void> {
+    await this.schemaManager.regenerateDefaultSchema();
+  }
+
+  // ---- Lint-fix delegation ----
+
+  getExistingWikiPages(): Promise<Array<{path: string; title: string; wikiLink: string; aliases?: string[]}>> {
+    const now = Date.now();
+    if (this.pagesCache && (now - this.pagesCacheTime) < this.PAGES_CACHE_TTL_MS) {
+      return Promise.resolve(this.pagesCache);
+    }
+    return getExistingWikiPages(this.app, this.settings.wikiFolder).then(data => {
+      this.pagesCache = data;
+      this.pagesCacheTime = Date.now();
+      return data;
+    });
+  }
+
+  async fixDeadLink(sourcePath: string, targetName: string): Promise<string> {
+    return this.lintFixer.fixDeadLink(sourcePath, targetName);
+  }
+
+  async fillEmptyPage(pagePath: string, existingContent?: string): Promise<string> {
+    return this.lintFixer.fillEmptyPage(pagePath, existingContent);
+  }
+
+  // Issue #103: delete empty stubs without running full lint pipeline
+  async deleteEmptyStubs(wikiFolder: string): Promise<{ deleted: number; failed: number; errors: string[] }> {
+    return this.lintFixer.deleteEmptyStubs(wikiFolder);
+  }
+
+  async linkOrphanPage(orphanPath: string): Promise<string[]> {
+    return this.lintFixer.linkOrphanPage(orphanPath);
+  }
+
+  // ---- Contradiction delegation ----
+
+  async noteContradiction(contradiction: ContradictionInfo) {
+    return this.contradictionManager.noteContradiction(contradiction);
+  }
+
+  async getOpenContradictions(): Promise<Array<{ path: string; status: string; claim: string; sourcePage: string }>> {
+    return this.contradictionManager.getOpenContradictions();
+  }
+
+  async updateContradictionStatus(filePath: string, newStatus: string): Promise<void> {
+    return this.contradictionManager.updateContradictionStatus(filePath, newStatus);
+  }
+
+  async resolveContradiction(contradictionPath: string): Promise<void> {
+    return this.contradictionManager.resolveContradiction(contradictionPath);
+  }
+
+  // ---- Conversation ingestion delegation ----
+
+  async ingestConversation(history: ConversationHistory): Promise<IngestReport> {
+    return this.conversationIngestor.ingestConversation(history);
+  }
+
+  formatConversation(history: ConversationHistory): string {
+    return formatConversation(history);
+  }
+
+  // ---- Index generation ----
+
+  async generateIndexFromEngine() {
+    await this.ensureWikiStructure();
+
+    const entities = this.app.vault.getMarkdownFiles()
+      .filter(f => f.path.startsWith(`${this.settings.wikiFolder}/entities/`));
+    const concepts = this.app.vault.getMarkdownFiles()
+      .filter(f => f.path.startsWith(`${this.settings.wikiFolder}/concepts/`));
+    const sources = this.app.vault.getMarkdownFiles()
+      .filter(f => f.path.startsWith(`${this.settings.wikiFolder}/sources/`));
+
+    const totalPages = entities.length + concepts.length + sources.length;
+
+    if (totalPages === 0) {
+      const indexPath = normalizePath(`${this.settings.wikiFolder}/index.md`);
+      await this.createOrUpdateFile(indexPath, `# Wiki Index\n\n> No pages yet. Ingest sources to populate the Wiki.\n`);
+      return;
+    }
+
+    await this.generateFlatIndex(entities, concepts, sources);
+  }
+
+  private async generateFlatIndex(
+    entities: TFile[],
+    concepts: TFile[],
+    sources: TFile[]
+  ): Promise<void> {
+    const lang = this.settings.wikiLanguage || 'en';
+    type LangKey = keyof typeof TEXTS.en.indexLabels;
+    const langKey: LangKey = (lang in TEXTS.en.indexLabels) ? lang as LangKey : 'en';
+    const labels = TEXTS.en.indexLabels[langKey];
+    let indexContent = `# Wiki Index\n\n`;
+    indexContent += `> ${labels.subtitle}\n\n`;
+    indexContent += `> Note: Text in backticks after page names shows aliases — alternative names, abbreviations, or translations.\n\n`;
+
+    indexContent += `## ${labels.entities}\n\n`;
+    for (const file of entities) {
+      const summary = await this.getPageSummary(file);
+      const aliases = await this.getPageAliases(file);
+      const aliasStr = aliases.length > 0 ? ` \`aliases: ${aliases.join(', ')}\`` : '';
+      indexContent += `- [[entities/${file.basename}|${file.basename}]]${aliasStr} - ${summary}\n`;
+    }
+
+    indexContent += `\n## ${labels.concepts}\n\n`;
+    for (const file of concepts) {
+      const summary = await this.getPageSummary(file);
+      const aliases = await this.getPageAliases(file);
+      const aliasStr = aliases.length > 0 ? ` \`aliases: ${aliases.join(', ')}\`` : '';
+      indexContent += `- [[concepts/${file.basename}|${file.basename}]]${aliasStr} - ${summary}\n`;
+    }
+
+    indexContent += `\n## ${labels.sources}\n\n`;
+    for (const file of sources) {
+      const aliases = await this.getPageAliases(file);
+      const aliasStr = aliases.length > 0 ? ` \`aliases: ${aliases.join(', ')}\`` : '';
+      indexContent += `- [[sources/${file.basename}|${file.basename}]]${aliasStr}\n`;
+    }
+
+    const indexPath = normalizePath(`${this.settings.wikiFolder}/index.md`);
+    await this.createOrUpdateFile(indexPath, indexContent);
+  }
+
+  async getPageSummary(file: TFile): Promise<string> {
+    const content = await this.app.vault.read(file);
+    const lines = content.split('\n').filter(l => l.trim() && !l.startsWith('#') && !l.startsWith('---'));
+    return lines[0]?.substring(0, 100) || 'No summary';
+  }
+
+  async getPageAliases(file: TFile): Promise<string[]> {
+    const content = await this.app.vault.read(file);
+    const fm = parseFrontmatter(content);
+    if (fm?.aliases && Array.isArray(fm.aliases) && fm.aliases.length > 0) {
+      return fm.aliases.filter(a => typeof a === 'string' && a.trim().length > 0).map(a => a.trim());
+    }
+    return [];
+  }
+
+  async updateLog(operation: string, analysis: SourceAnalysis) {
+    const logPath = `${this.settings.wikiFolder}/log.md`;
+    const date = new Date().toISOString().split('T')[0];
+    const lang = this.settings.wikiLanguage || 'en';
+    type LogLangKey = keyof typeof TEXTS.en.logLabels;
+    const langKey: LogLangKey = (lang in TEXTS.en.logLabels) ? lang as LogLangKey : 'en';
+    const labels = TEXTS.en.logLabels[langKey];
+
+    let entry = `\n\n## [${date}] ${operation} | ${analysis.source_title}\n\n`;
+    entry += `**${labels.createdPages}**：${analysis.created_pages.map(p => `[[${p.replace(this.settings.wikiFolder + '/', '')}]]`).join(', ')}\n\n`;
+    entry += `**${labels.updatedPages}**：${analysis.updated_pages.map(p => `[[${p}]]`).join(', ')}\n\n`;
+
+    if (analysis.contradictions.length > 0) {
+      entry += `**${labels.contradictionsFound}**：\n`;
+      for (const c of analysis.contradictions) {
+        entry += `- ${c.claim} vs ${c.source_page}\n`;
+      }
+    }
+
+    const existingLog = await this.tryReadFile(logPath) || `# Wiki ${lang === 'zh' ? '操作日志' : 'Operation Log'}\n\n`;
+    await this.createOrUpdateFile(logPath, existingLog + entry);
+  }
+
+  /** Merge a duplicate source page into a target page. */
+  async mergeDuplicatePages(targetPath: string, sourcePath: string): Promise<string> {
+    return this.lintFixer.mergeDuplicatePages(targetPath, sourcePath);
+  }
+
+  /** Append a lint-fix entry to the operation log. */
+  async logLintFix(operation: string, details: string): Promise<void> {
+    const logPath = `${this.settings.wikiFolder}/log.md`;
+    // Use minute-precision timestamp so multiple entries on the same day are distinguishable.
+    const now = new Date();
+    const date = now.toISOString().split('T')[0];
+    const time = now.toTimeString().slice(0, 5); // HH:MM
+    const lang = this.settings.wikiLanguage || 'en';
+    const entry = `\n\n## [${date} ${time}] ${operation}\n\n${details}\n`;
+    try {
+      let existingLog = await this.tryReadFile(logPath);
+      if (!existingLog) {
+        existingLog = `# Wiki ${lang === 'zh' ? '操作日志' : 'Operation Log'}\n\n`;
+      }
+      // Cap the existing log at a reasonable size to avoid Obsidian choking on
+      // a multi-megabyte file. If existingLog + entry would exceed MAX_LOG_BYTES,
+      // trim from the front while preserving the header.
+      const MAX_LOG_BYTES = 512 * 1024; // 512 KB
+      const projectedSize = (existingLog.length + entry.length) * 2; // UTF-16 estimate
+      if (projectedSize > MAX_LOG_BYTES) {
+        const headerEnd = existingLog.indexOf('\n\n');
+        const header = headerEnd > 0 ? existingLog.substring(0, headerEnd + 2) : '# Wiki Operation Log\n\n';
+        // Keep the most recent portion
+        const keepBytes = MAX_LOG_BYTES / 2;
+        const trimmed = existingLog.substring(existingLog.length - keepBytes);
+        // Find next H2 boundary so we don't cut mid-entry
+        const h2Idx = trimmed.indexOf('\n## ');
+        existingLog = header + (h2Idx > 0 ? trimmed.substring(h2Idx + 1) : trimmed);
+        console.warn(`[logLintFix] ${logPath} exceeded ${MAX_LOG_BYTES} bytes; trimmed oldest entries`);
+      }
+      await this.createOrUpdateFile(logPath, existingLog + entry);
+    } catch (e) {
+      // Issue: log persistence failures were silently swallowed before, leaving
+      // the user wondering why the modal showed but log.md didn't update.
+      // Now log the error AND the path so the user can diagnose from console.
+      console.error(`[logLintFix] failed to write ${logPath}:`, e);
+      throw e; // re-throw so callers (e.g. runLintWiki) can surface the failure
+    }
+  }
+}

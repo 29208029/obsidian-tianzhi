@@ -1,0 +1,1648 @@
+/* LLM Wiki Plugin Styles */
+
+/* Number input field width for settings */
+.llm-wiki-number-input {
+  width: 100px;
+}
+
+/* 查询模态框样式 */
+.llm-wiki-query-textarea {
+  width: 100%;
+  min-height: 150px;
+  padding: 8px;
+  font-family: var(--font-text);
+  font-size: 14px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  color: var(--text-normal);
+  resize: none;
+}
+
+.llm-wiki-answer-modal {
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 10px;
+  font-family: var(--font-text);
+  line-height: 1.6;
+}
+
+/* 设置面板样式 */
+.llm-wiki-settings .setting-item {
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding: 12px 0;
+}
+
+.llm-wiki-settings .setting-item:last-child {
+  border-bottom: none;
+}
+
+/* 命令面板提示 */
+.llm-wiki-notice {
+  padding: 10px 15px;
+  background: var(--background-modifier-success);
+  color: var(--text-on-accent);
+  border-radius: 4px;
+  margin: 10px 0;
+}
+
+/* Query Modal */
+.llm-wiki-query-modal {
+  width: 800px;
+  height: 780px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.llm-wiki-query-modal .modal-header {
+  display: none;
+}
+
+.llm-wiki-query-content {
+  height: 100%;
+}
+
+.llm-wiki-query-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* ── History (messages area) ── */
+.llm-wiki-query-history {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+  background: var(--background-primary);
+}
+
+/* ── Input area ── */
+.llm-wiki-query-input-container {
+  flex-shrink: 0;
+  border-top: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  padding: 10px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-wiki-query-input-wrapper {
+  position: relative;
+}
+
+.llm-wiki-query-textarea {
+  width: 100%;
+  min-height: 64px;
+  max-height: 120px;
+  padding: 10px 44px 10px 12px;
+  border: 1.5px solid var(--background-modifier-border);
+  border-radius: 10px;
+  font-family: var(--font-text);
+  font-size: var(--font-ui-small);
+  color: var(--text-normal);
+  resize: none;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+  line-height: 1.55;
+  background: var(--background-secondary);
+  box-sizing: border-box;
+}
+
+.llm-wiki-query-textarea:focus {
+  border-color: #005DDD;
+  background: var(--background-primary);
+  box-shadow: 0 0 0 3px rgba(0, 93, 221, 0.1);
+}
+
+.llm-wiki-query-textarea::placeholder {
+  color: var(--text-faint);
+}
+
+.llm-wiki-query-send-btn {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: none;
+  background: #005DDD;
+  color: #ffffff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 150ms ease, transform 150ms ease;
+  box-shadow: 0 2px 6px rgba(0, 93, 221, 0.2);
+}
+
+.llm-wiki-query-send-btn:hover {
+  background: #004bb5;
+  transform: scale(1.05);
+}
+
+.llm-wiki-query-send-btn:active {
+  transform: scale(0.96);
+}
+
+.llm-wiki-query-send-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.llm-wiki-query-send-btn.is-streaming {
+  background: #e74c3c;
+  box-shadow: 0 2px 6px rgba(231, 76, 60, 0.25);
+}
+
+.llm-wiki-query-send-btn.is-streaming:hover {
+  background: #c0392b;
+}
+
+/* ── Action bar ── */
+.llm-wiki-query-action-bar {
+  display: flex;
+  gap: 6px;
+}
+
+.llm-wiki-query-save-btn,
+.llm-wiki-query-clear-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-muted);
+}
+
+.llm-wiki-query-save-btn:hover,
+.llm-wiki-query-clear-btn:hover {
+  border-color: var(--background-modifier-border-hover);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+}
+
+.llm-wiki-query-save-btn svg,
+.llm-wiki-query-clear-btn svg {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+}
+
+/* ── Status bar ── */
+.llm-wiki-query-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.llm-wiki-query-count {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.llm-wiki-query-token-meter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.llm-wiki-query-token-track {
+  width: 64px;
+  height: 5px;
+  background: var(--background-modifier-hover);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.llm-wiki-query-token-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #005DDD, #004bb5);
+  border-radius: 3px;
+  transition: width 250ms ease;
+}
+
+.llm-wiki-query-token-label {
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* ── Message bubbles ── */
+.llm-wiki-query-message-wrapper {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.llm-wiki-query-message-wrapper:last-child {
+  margin-bottom: 0;
+}
+
+.llm-wiki-query-message-label {
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+}
+
+.llm-wiki-query-message-user {
+  align-items: flex-end;
+}
+
+.llm-wiki-query-message-assistant {
+  align-items: flex-start;
+}
+
+.llm-wiki-query-message-body {
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+  max-width: 90%;
+  padding: 10px 14px;
+  border-radius: 12px;
+}
+
+.llm-wiki-query-message-user .llm-wiki-query-message-body {
+  background: #005DDD;
+  color: #ffffff;
+  border-bottom-right-radius: 4px;
+}
+
+.llm-wiki-query-message-assistant .llm-wiki-query-message-body {
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  border-bottom-left-radius: 4px;
+}
+
+/* Markdown element styles — mirror Obsidian's native rendering */
+.llm-wiki-query-message-body table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 12px 0;
+}
+
+.llm-wiki-query-message-body th,
+.llm-wiki-query-message-body td {
+  border: 1px solid var(--table-border-color, var(--background-modifier-border));
+  padding: 6px 13px;
+  text-align: left;
+}
+
+.llm-wiki-query-message-body th {
+  background-color: var(--table-header-background, var(--background-secondary));
+  font-weight: 600;
+}
+
+.llm-wiki-query-message-body tr:nth-child(even) {
+  background-color: var(--table-row-alt-background, var(--background-secondary-alt));
+}
+
+.llm-wiki-query-message-body pre {
+  background: var(--code-background, var(--background-secondary));
+  padding: 12px 16px;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 12px 0;
+}
+
+.llm-wiki-query-message-body code {
+  font-family: var(--font-monospace);
+  font-size: 0.9em;
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  background: var(--code-background, var(--background-secondary));
+}
+
+.llm-wiki-query-message-body pre > code {
+  padding: 0;
+  background: none;
+}
+
+.llm-wiki-query-message-body blockquote {
+  border-left: 3px solid var(--blockquote-border-color, #005DDD);
+  margin: 12px 0;
+  padding: 4px 16px;
+  color: var(--text-muted);
+}
+
+.llm-wiki-query-message-body ul,
+.llm-wiki-query-message-body ol {
+  padding-left: 24px;
+}
+
+.llm-wiki-query-message-body h1,
+.llm-wiki-query-message-body h2,
+.llm-wiki-query-message-body h3,
+.llm-wiki-query-message-body h4 {
+  margin-top: 16px;
+  margin-bottom: 8px;
+}
+
+.llm-wiki-query-message-body hr {
+  border: none;
+  border-top: 1px solid var(--background-modifier-border);
+  margin: 16px 0;
+}
+
+/* ── Empty state (no messages yet / after clear) ──
+   Shown inside .llm-wiki-query-history when the message list is empty.
+   Two stacked blocks:
+     1. A blue tip strip — full-width, soft blue pill, horizontally centered
+     2. A large AI card — light gray surface, big radius, gentle shadow */
+.llm-wiki-query-empty {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px 14px 18px;
+  align-items: stretch;
+}
+
+/* Tip strip — light blue background, large radius, gentle shadow */
+.llm-wiki-query-empty-tip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 16px;
+  background: rgba(37, 99, 235, 0.08);
+  border: none;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.llm-wiki-query-empty-tip-icon {
+  font-size: 15px;
+  line-height: 1;
+  /* Yellow emoji already has its own color; we only nudge size/line */
+}
+
+.llm-wiki-query-empty-tip-text {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1d4ed8;
+  line-height: 1.4;
+}
+
+/* AI card — light surface, big radius, soft shadow, generous padding */
+.llm-wiki-query-empty-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 18px 20px;
+  background: var(--background-secondary);
+  border-radius: 18px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+.llm-wiki-query-empty-avatar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #2563eb;
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.llm-wiki-query-empty-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.llm-wiki-query-empty-greet {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-normal);
+  line-height: 1.5;
+}
+
+.llm-wiki-query-empty-desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.7;
+  /* Allow the description to wrap inside the narrow sidebar */
+  word-break: break-word;
+}
+
+/* Copy button */
+.llm-wiki-query-copy-btn {
+  position: absolute;
+  top: 0;
+  right: 0;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+  color: var(--text-muted);
+}
+
+.llm-wiki-query-message-wrapper:hover .llm-wiki-query-copy-btn,
+.llm-wiki-query-response-live .llm-wiki-query-copy-btn {
+  opacity: 1;
+}
+
+.llm-wiki-query-copy-btn:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+/* Live response (currently generating) */
+.llm-wiki-query-response-live {
+  margin-bottom: 12px;
+}
+
+.llm-wiki-query-response-live .llm-wiki-query-message-label {
+  color: #005DDD;
+}
+
+.llm-wiki-query-status {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+/* User message label right-alignment */
+.llm-wiki-query-message-user .llm-wiki-query-message-label {
+  text-align: right;
+}
+
+/* Suggest Save Modal (post-query feedback) */
+.llm-wiki-suggest-save-modal {
+  padding: 20px;
+}
+
+.llm-wiki-suggest-save-modal h3 {
+  margin-bottom: 12px;
+}
+
+.llm-wiki-suggest-save-modal p {
+  margin-bottom: 20px;
+  color: var(--text-muted);
+}
+
+.llm-wiki-suggest-save-buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+/* Settings panel UI elements */
+.llm-wiki-ollama-hint {
+  color: var(--text-muted);
+  margin: 10px 0;
+  font-size: 13px;
+}
+
+.llm-wiki-connection-status {
+  margin: 12px 0;
+  font-weight: 500;
+}
+.llm-wiki-status-ready {
+  color: var(--color-green);
+}
+.llm-wiki-status-notready {
+  color: var(--color-orange);
+}
+
+.llm-wiki-status-row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.llm-wiki-plugin-info {
+  margin: 16px 0 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.llm-wiki-blue-infobox {
+  background: var(--background-modifier-hover);
+  border: 1px solid #005DDD;
+  border-radius: 6px;
+  padding: 8px 14px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-accent);
+  font-weight: 500;
+}
+
+.llm-wiki-yellow-infobox {
+  background: var(--background-modifier-warning);
+  border: 1px solid var(--color-orange);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-warning);
+}
+
+.llm-wiki-section-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin: 0 0 8px 0;
+}
+
+/* Ingestion status bar */
+.llm-wiki-status-bar-hidden {
+  display: none;
+}
+
+/* Issue #85 v2: Tag chip input (GitHub Issue Labels style) */
+.llm-wiki-tag-container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;       /* chips top-aligned; input on its own row */
+  align-content: flex-start;
+  gap: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 4px 6px;
+  min-height: 32px;
+  width: 100%;
+  background: var(--background-primary);
+  /* No left-padding from the input's border-box; chips start at padding-left. */
+  box-sizing: border-box;
+}
+.llm-wiki-tag-container:focus-within {
+  border-color: #005DDD;
+}
+.llm-wiki-tag-container--duplicate {
+  animation: llm-wiki-tag-shake 0.4s ease;
+}
+@keyframes llm-wiki-tag-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); border-color: var(--color-orange); }
+  75% { transform: translateX(4px); border-color: var(--color-orange); }
+}
+.llm-wiki-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--background-modifier-hover);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--text-normal);
+  font-family: var(--font-text);
+}
+.llm-wiki-tag-chip-remove {
+  cursor: pointer;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+}
+.llm-wiki-tag-chip-remove:hover {
+  color: var(--color-orange);
+}
+.llm-wiki-tag-input {
+  border: none;
+  outline: none;
+  /* Force the input onto its own row below the chips. flex-basis:100%
+     makes it span the full container width regardless of how many
+     chips exist; flex-shrink:1 lets it shrink when the container is
+     narrow (Obsidian narrow settings pane). */
+  flex: 0 0 100%;
+  order: 99;             /* always last, after all chips */
+  min-height: 22px;
+  background: transparent;
+  color: var(--text-normal);
+  font-family: var(--font-text);
+  font-size: 13px;
+}
+.llm-wiki-tag-sr-live {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+/* Issue #85 v4: Default-reference fallback tags. When the persisted
+   custom CSV is empty, the chip input materializes the default
+   vocabulary (e.g. person/organization/…) as fully-editable chips —
+   visually identical to user-added ones, with a × remove button.
+   They are an editable baseline, not a read-only preview. */
+
+/* ===== Sidebar (ItemView with Chat / Wiki Sync tabs) ===== */
+
+/* ItemView root: occupy the right sidebar's full height and force a white
+   surface. The right sidebar in Obsidian uses --background-secondary
+   (gray) by default; the plugin wants the whole view to read white so the
+   logo header and panel feel like one continuous surface. Using
+   --background-primary keeps the result white in the light theme while
+   still respecting the user's theme tokens. */
+.llm-wiki-sidebar-view-content {
+  height: 100%;
+  overflow: hidden;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: var(--background-primary);
+}
+
+.llm-wiki-sidebar-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--background-primary);
+}
+
+/* ── Brand header: logo on the left, divider underneath, sits above the
+   segmented tab control. The divider separates the brand row from the
+   tab bar. ── */
+.llm-wiki-sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px 8px;
+  flex: 0 0 auto;
+}
+
+.llm-wiki-sidebar-logo {
+  display: block;
+  height: 28px;
+  width: auto;
+  /* Subtle optical balance — PNG has a tight bounding box; let it breathe */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.llm-wiki-sidebar-divider {
+  height: 1px;
+  margin: 0 12px;
+  background: var(--background-modifier-border);
+}
+
+/* ── Segmented control: one gray capsule wraps both tabs; the active tab
+   renders a blue inner pill inside it. Capsule is centered, 2/3 width. ── */
+.llm-wiki-sidebar-tabs {
+  display: flex;
+  width: 66%;
+  margin: 10px auto 6px;
+  padding: 3px;
+  background: var(--background-modifier-hover);
+  border-radius: 9999px;
+}
+
+.llm-wiki-sidebar-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 12px;
+  border-radius: 9999px;
+  font-size: var(--font-ui-small);
+  font-weight: 500;
+  cursor: pointer;
+  /* Hard reset of Obsidian's default <button> chrome — without `!important`
+     here Obsidian's `--interactive-normal` white background + inset box-shadow
+     bleed through on every state and make unselected tabs look like white
+     capsules. Only the active tab (see below) reintroduces a background. */
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-muted);
+  user-select: none;
+  -webkit-user-select: none;
+  /* iOS-style smooth color transition when the selection thumb moves */
+  transition: background-color 0.25s ease, color 0.25s ease, font-weight 0.25s ease;
+}
+
+/* Unselected tabs stay flat in every state — no capsule on hover/focus/active.
+   Re-assert transparent + no shadow because Obsidian's button :hover/:active
+   rules re-apply a background otherwise. */
+.llm-wiki-sidebar-tab:hover:not(.llm-wiki-sidebar-tab-active),
+.llm-wiki-sidebar-tab:focus:not(.llm-wiki-sidebar-tab-active),
+.llm-wiki-sidebar-tab:active:not(.llm-wiki-sidebar-tab-active) {
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text-normal);
+}
+
+.llm-wiki-sidebar-tab-active {
+  background: #005DDD !important;
+  color: #ffffff !important;
+  font-weight: 600;
+}
+
+.llm-wiki-sidebar-tab svg {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.llm-wiki-sidebar-tab span {
+  display: inline-block;
+  line-height: 1;
+}
+
+.llm-wiki-sidebar-content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* When QueryModal is inlined into the sidebar, strip its modal chrome and
+   let it fill the panel. */
+.llm-wiki-inline-query {
+  position: static !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.llm-wiki-inline-query .llm-wiki-query-container {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+}
+
+.llm-wiki-inline-query .llm-wiki-query-history {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.llm-wiki-inline-query .llm-wiki-query-input-container {
+  flex: 0 0 auto;
+}
+
+/* ===== Sync Panel ===== */
+
+.llm-wiki-sync-panel {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.llm-wiki-sync-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.llm-wiki-sync-section-title {
+  margin: 0;
+  padding: 0;
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.llm-wiki-sync-section-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.llm-wiki-sync-action {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-normal);
+  text-align: left;
+  font-size: var(--font-ui-small);
+  transition: background 80ms ease;
+}
+
+.llm-wiki-sync-action:hover:not([disabled]) {
+  background: var(--background-modifier-hover);
+}
+
+.llm-wiki-sync-action[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ===== Auth / Tianzhi Cloud Login ===== */
+
+.llm-wiki-auth-card {
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.llm-wiki-auth-title {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.llm-wiki-auth-desc {
+  margin: 0;
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.llm-wiki-auth-login-btn {
+  padding: 8px 16px;
+  align-self: flex-start;
+}
+
+.llm-wiki-auth-status {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  min-height: 1.4em;
+}
+
+/* Profile (signed in) */
+.llm-wiki-profile-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.llm-wiki-profile-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #005DDD;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.llm-wiki-profile-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.llm-wiki-profile-name {
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  color: var(--text-normal);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-wiki-profile-email {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.llm-wiki-profile-logout-btn {
+  padding: 4px 10px;
+  font-size: var(--font-ui-small);
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--text-normal);
+  flex-shrink: 0;
+}
+
+.llm-wiki-profile-logout-btn:hover:not([disabled]) {
+  background: var(--background-modifier-hover);
+}
+
+/* Sync status card */
+.llm-wiki-sync-card {
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.llm-wiki-sync-card-title {
+  margin: 0;
+  font-size: var(--font-ui-medium);
+  font-weight: 600;
+  color: var(--text-normal);
+}
+
+.llm-wiki-sync-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-ui-small);
+}
+
+.llm-wiki-sync-status-label {
+  color: var(--text-muted);
+}
+
+.llm-wiki-sync-status-value {
+  color: var(--text-normal);
+  font-weight: 500;
+}
+
+.llm-wiki-sync-status-idle {
+  color: var(--text-muted);
+}
+
+.llm-wiki-sync-status-syncing {
+  color: var(--text-accent);
+}
+
+.llm-wiki-sync-status-completed {
+  color: var(--text-success, var(--text-normal));
+}
+
+.llm-wiki-sync-hint {
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.llm-wiki-sync-now-btn {
+  align-self: flex-start;
+  padding: 6px 16px;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/* === Tailwind utilities (auto-generated) === */
+/* Tailwind 入口 — 被打包后注入到 styles.css 的最前面 */
+
+/* 注意:preflight 已在 tailwind.config.js 禁用,这里直接 @tailwind components/utilities */
+
+.tw-m-0 {
+  margin: 0px
+}
+
+.tw-ml-auto {
+  margin-left: auto
+}
+
+.tw-mt-2 {
+  margin-top: 0.5rem
+}
+
+.tw-inline-block {
+  display: inline-block
+}
+
+.tw-flex {
+  display: flex
+}
+
+.tw-h-1\.5 {
+  height: 0.375rem
+}
+
+.tw-h-10 {
+  height: 2.5rem
+}
+
+.tw-h-12 {
+  height: 3rem
+}
+
+.tw-h-2 {
+  height: 0.5rem
+}
+
+.tw-h-4 {
+  height: 1rem
+}
+
+.tw-h-5 {
+  height: 1.25rem
+}
+
+.tw-h-6 {
+  height: 1.5rem
+}
+
+.tw-h-8 {
+  height: 2rem
+}
+
+.tw-h-9 {
+  height: 2.25rem
+}
+
+.tw-h-full {
+  height: 100%
+}
+
+.tw-w-10 {
+  width: 2.5rem
+}
+
+.tw-w-12 {
+  width: 3rem
+}
+
+.tw-w-2 {
+  width: 0.5rem
+}
+
+.tw-w-4 {
+  width: 1rem
+}
+
+.tw-w-5 {
+  width: 1.25rem
+}
+
+.tw-w-6 {
+  width: 1.5rem
+}
+
+.tw-w-8 {
+  width: 2rem
+}
+
+.tw-w-9 {
+  width: 2.25rem
+}
+
+.tw-w-full {
+  width: 100%
+}
+
+.tw-min-w-0 {
+  min-width: 0px
+}
+
+.tw-min-w-\[220px\] {
+  min-width: 220px
+}
+
+.tw-max-w-\[300px\] {
+  max-width: 300px
+}
+
+.tw-flex-1 {
+  flex: 1 1 0%
+}
+
+.tw-shrink-0 {
+  flex-shrink: 0
+}
+
+@keyframes tw-pulse {
+  50% {
+    opacity: .5
+  }
+}
+
+.tw-animate-pulse {
+  animation: tw-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite
+}
+
+.tw-flex-col {
+  flex-direction: column
+}
+
+.tw-items-start {
+  align-items: flex-start
+}
+
+.tw-items-center {
+  align-items: center
+}
+
+.tw-justify-center {
+  justify-content: center
+}
+
+.tw-justify-between {
+  justify-content: space-between
+}
+
+.tw-gap-0 {
+  gap: 0px
+}
+
+.tw-gap-1 {
+  gap: 0.25rem
+}
+
+.tw-gap-1\.5 {
+  gap: 0.375rem
+}
+
+.tw-gap-2 {
+  gap: 0.5rem
+}
+
+.tw-gap-2\.5 {
+  gap: 0.625rem
+}
+
+.tw-gap-3 {
+  gap: 0.75rem
+}
+
+.tw-gap-4 {
+  gap: 1rem
+}
+
+.tw-overflow-hidden {
+  overflow: hidden
+}
+
+.tw-overflow-y-auto {
+  overflow-y: auto
+}
+
+.tw-text-ellipsis {
+  text-overflow: ellipsis
+}
+
+.tw-break-all {
+  word-break: break-all
+}
+
+.tw-rounded-full {
+  border-radius: 9999px
+}
+
+.tw-rounded-lg {
+  border-radius: 0.5rem
+}
+
+.tw-rounded-md {
+  border-radius: 0.375rem
+}
+
+.tw-border {
+  border-width: 1px
+}
+
+.tw-border-2 {
+  border-width: 2px
+}
+
+.tw-border-t {
+  border-top-width: 1px
+}
+
+.tw-border-blue-300 {
+  --tw-border-opacity: 1;
+  border-color: rgb(147 197 253 / var(--tw-border-opacity, 1))
+}
+
+.tw-border-surface-border {
+  border-color: var(--background-modifier-border)
+}
+
+.tw-bg-blue-50 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(239 246 255 / var(--tw-bg-opacity, 1))
+}
+
+.tw-bg-gray-200 {
+  --tw-bg-opacity: 1;
+  background-color: rgb(229 231 235 / var(--tw-bg-opacity, 1))
+}
+
+.tw-bg-muted-fg {
+  --tw-bg-opacity: 1;
+  background-color: rgb(156 163 175 / var(--tw-bg-opacity, 1))
+}
+
+.tw-bg-primary {
+  --tw-bg-opacity: 1;
+  background-color: rgb(37 99 235 / var(--tw-bg-opacity, 1))
+}
+
+.tw-bg-primary\/10 {
+  background-color: rgb(37 99 235 / 0.1)
+}
+
+.tw-bg-success {
+  --tw-bg-opacity: 1;
+  background-color: rgb(16 185 129 / var(--tw-bg-opacity, 1))
+}
+
+.tw-bg-surface-alt {
+  background-color: var(--background-primary)
+}
+
+.tw-bg-transparent {
+  background-color: transparent
+}
+
+.tw-bg-white {
+  --tw-bg-opacity: 1;
+  background-color: rgb(255 255 255 / var(--tw-bg-opacity, 1))
+}
+
+.tw-p-4 {
+  padding: 1rem
+}
+
+.tw-p-5 {
+  padding: 1.25rem
+}
+
+.tw-p-6 {
+  padding: 1.5rem
+}
+
+.tw-px-3 {
+  padding-left: 0.75rem;
+  padding-right: 0.75rem
+}
+
+.tw-px-4 {
+  padding-left: 1rem;
+  padding-right: 1rem
+}
+
+.tw-px-5 {
+  padding-left: 1.25rem;
+  padding-right: 1.25rem
+}
+
+.tw-py-1\.5 {
+  padding-top: 0.375rem;
+  padding-bottom: 0.375rem
+}
+
+.tw-py-2 {
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem
+}
+
+.tw-py-3 {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem
+}
+
+.tw-pl-1\.5 {
+  padding-left: 0.375rem
+}
+
+.tw-pr-3 {
+  padding-right: 0.75rem
+}
+
+.tw-pt-1 {
+  padding-top: 0.25rem
+}
+
+.tw-text-left {
+  text-align: left
+}
+
+.tw-text-center {
+  text-align: center
+}
+
+.tw-text-base {
+  font-size: 1rem;
+  line-height: 1.5rem
+}
+
+.tw-text-lg {
+  font-size: 1.125rem;
+  line-height: 1.75rem
+}
+
+.tw-text-sm {
+  font-size: 0.875rem;
+  line-height: 1.25rem
+}
+
+.tw-text-xs {
+  font-size: 0.75rem;
+  line-height: 1rem
+}
+
+.tw-font-bold {
+  font-weight: 700
+}
+
+.tw-font-medium {
+  font-weight: 500
+}
+
+.tw-font-semibold {
+  font-weight: 600
+}
+
+.tw-uppercase {
+  text-transform: uppercase
+}
+
+.tw-leading-relaxed {
+  line-height: 1.625
+}
+
+.tw-leading-tight {
+  line-height: 1.25
+}
+
+.tw-tracking-wide {
+  letter-spacing: 0.025em
+}
+
+.tw-text-blue-700\/80 {
+  color: rgb(29 78 216 / 0.8)
+}
+
+.tw-text-blue-900 {
+  --tw-text-opacity: 1;
+  color: rgb(30 58 138 / var(--tw-text-opacity, 1))
+}
+
+.tw-text-danger {
+  --tw-text-opacity: 1;
+  color: rgb(239 68 68 / var(--tw-text-opacity, 1))
+}
+
+.tw-text-muted {
+  --tw-text-opacity: 1;
+  color: rgb(107 114 128 / var(--tw-text-opacity, 1))
+}
+
+.tw-text-primary {
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity, 1))
+}
+
+.tw-text-success {
+  --tw-text-opacity: 1;
+  color: rgb(16 185 129 / var(--tw-text-opacity, 1))
+}
+
+.tw-text-white {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1))
+}
+
+.tw-shadow-sm {
+  --tw-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --tw-shadow-colored: 0 1px 2px 0 var(--tw-shadow-color);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow)
+}
+
+.tw-transition-all {
+  transition-property: all;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms
+}
+
+.tw-transition-colors {
+  transition-property: color, background-color, border-color, text-decoration-color, fill, stroke;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms
+}
+
+.tw-duration-300 {
+  transition-duration: 300ms
+}
+
+.\[cosmo-bootstrap\:fetchKey\] {
+  cosmo-bootstrap: fetchKey
+}
+
+.\[cosmo-bootstrap\:settings\] {
+  cosmo-bootstrap: settings
+}
+
+.\[cosmo-bootstrap\:sync-panel\] {
+  cosmo-bootstrap: sync-panel
+}
+
+.hover\:tw-border-danger:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(239 68 68 / var(--tw-border-opacity, 1))
+}
+
+.hover\:tw-border-primary:hover {
+  --tw-border-opacity: 1;
+  border-color: rgb(37 99 235 / var(--tw-border-opacity, 1))
+}
+
+.hover\:tw-bg-danger:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(239 68 68 / var(--tw-bg-opacity, 1))
+}
+
+.hover\:tw-bg-gray-50:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(249 250 251 / var(--tw-bg-opacity, 1))
+}
+
+.hover\:tw-bg-primary-hover:hover {
+  --tw-bg-opacity: 1;
+  background-color: rgb(29 78 216 / var(--tw-bg-opacity, 1))
+}
+
+.hover\:tw-text-primary:hover {
+  --tw-text-opacity: 1;
+  color: rgb(37 99 235 / var(--tw-text-opacity, 1))
+}
+
+.hover\:tw-text-white:hover {
+  --tw-text-opacity: 1;
+  color: rgb(255 255 255 / var(--tw-text-opacity, 1))
+}
+
+.focus\:tw-outline-none:focus {
+  outline: 2px solid transparent;
+  outline-offset: 2px
+}
+
+.focus\:tw-ring-2:focus {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000)
+}
+
+.focus\:tw-ring-success\/40:focus {
+  --tw-ring-color: rgb(16 185 129 / 0.4)
+}
+
+.focus-visible\:tw-ring-2:focus-visible {
+  --tw-ring-offset-shadow: var(--tw-ring-inset) 0 0 0 var(--tw-ring-offset-width) var(--tw-ring-offset-color);
+  --tw-ring-shadow: var(--tw-ring-inset) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color);
+  box-shadow: var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow, 0 0 #0000)
+}
+
+.focus-visible\:tw-ring-danger\/40:focus-visible {
+  --tw-ring-color: rgb(239 68 68 / 0.4)
+}
+
+.focus-visible\:tw-ring-primary\/40:focus-visible {
+  --tw-ring-color: rgb(37 99 235 / 0.4)
+}
+
+.disabled\:tw-cursor-not-allowed:disabled {
+  cursor: not-allowed
+}
+
+.disabled\:tw-opacity-60:disabled {
+  opacity: 0.6
+}

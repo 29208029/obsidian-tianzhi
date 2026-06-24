@@ -112,8 +112,7 @@ function LoginPage({ plugin, busy, setBusy }: LoginPageProps): ReactElement {
       // CosmoGPT auto-bootstrap: 同样的模式 —— 登录后直接调
       // plugin.runCosmoBootstrap(),不依赖 subscribe / provider 设置。
       // runCosmoBootstrap() 内部读 IAM 状态,强制 provider=cosmogpt 跑一次。
-      cosmoLog('IAM login resolved; ' +
-          'calling plugin.runCosmoBootstrap()');
+      cosmoLog('IAM 登录完成;开始调用 plugin.runCosmoBootstrap()');
       void plugin.runCosmoBootstrap();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "login failed";

@@ -76,6 +76,7 @@ import {
   markCosmoBootstrapCompleted,
   COSMO_DEFAULT_MODEL,
 } from './auth/cosmo-gpt-bootstrap';
+import { shouldRunCosmoBootstrap } from './auth/cosmo-bootstrap-guard';
 import { FileSuggestModal, FolderSuggestModal, IngestReportModal } from './ui/modals';
 import { SchemaManager } from './schema/schema-manager';
 import { AutoMaintainManager } from './schema/auto-maintain';
@@ -321,10 +322,10 @@ export default class LLMWikiPlugin extends Plugin {
    */
   runCosmoBootstrap(): Promise<void> {
     if (this.cosmoBootstrapTask) {
-      cosmoLog('runCosmoBootstrap: returning in-flight task');
+      cosmoLog('runCosmoBootstrap:已有在途任务,直接返回该 Promise');
       return this.cosmoBootstrapTask;
     }
-    cosmoLog('runCosmoBootstrap: starting new task');
+    cosmoLog('runCosmoBootstrap:启动新任务');
     this.cosmoBootstrapTask = (async () => {
       try {
         // bootstrap 内部会自己把 provider 设为 anthropic-compatible,
@@ -365,39 +366,43 @@ export default class LLMWikiPlugin extends Plugin {
    * @param trigger  Free-form label for logs (onload | iam-login | settings).
    */
   private async maybeRunCosmoBootstrap(trigger: string): Promise<void> {
-    cosmoLog(`maybeRunCosmoBootstrap called (trigger=${trigger}, ` +
+    cosmoLog(`maybeRunCosmoBootstrap 被调用 (trigger=${trigger}, ` +
         `provider=${this.settings.provider}, ` +
-        `apiKey empty? ${!this.settings.apiKey})`);
+        `apiKey 为空? ${!this.settings.apiKey})`);
 
     // Auto-bootstrap when:
     //   (a) user explicitly selected the cosmogpt provider, OR
-    //   (b) apiKey is empty AND provider is currently an Anthropic-compatible
-    //       variant (so users who just logged in without configuring get the
-    //       right defaults applied automatically).
-    const isCosmoLike = this.settings.provider === 'cosmogpt';
-    const isFreshAnthropic = this.settings.provider === 'anthropic-compatible'
-        && !this.settings.apiKey;
-    if (!isCosmoLike && !isFreshAnthropic) {
-      cosmoLog(`⏭ skip (provider=${this.settings.provider}, ` +
-          `apiKey present? ${!!this.settings.apiKey} — not a CosmoGPT path)`);
+    //   (b) apiKey is empty AND provider is currently an Anthropic-family
+    //       variant (anthropic or anthropic-compatible) so users who just
+    //       logged in without configuring get the right defaults applied
+    //       automatically. The default provider for a brand-new account is
+    //       'anthropic' (DEFAULT_SETTINGS), so accepting it here is what lets
+    //       a fresh login auto-fill — bootstrap then overwrites provider to
+    //       'anthropic-compatible' internally.
+    //
+    // The guard is a pure function (cosmo-bootstrap-guard.ts) so it is
+    // unit-testable without an IAMAuthService / plugin instance.
+    if (!shouldRunCosmoBootstrap(this.settings.provider, this.settings.apiKey)) {
+      cosmoLog(`⏭ 跳过 (provider=${this.settings.provider}, ` +
+          `apiKey 已配置? ${!!this.settings.apiKey} —— 非 CosmoGPT 路径)`);
       return;
     }
 
     const iamState = IAMAuthService.getInstance().getState();
     const employeeCode = iamState.userInfo?.employee_code;
     const accessToken = iamState.userInfo?.access_token;
-    cosmoLog(`IAM state: isLoggedIn=${iamState.isLoggedIn}, ` +
-        `userName=${iamState.userInfo?.user_name ?? '(none)'}, ` +
-        `employeeCode=${employeeCode ?? '(missing)'}, ` +
-        `accessToken length=${accessToken?.length ?? 0}`);
+    cosmoLog(`IAM 状态:isLoggedIn=${iamState.isLoggedIn}, ` +
+        `userName=${iamState.userInfo?.user_name ?? '(无)'}, ` +
+        `employeeCode=${employeeCode ?? '(缺失)'}, ` +
+        `accessToken 长度=${accessToken?.length ?? 0}`);
     if (!iamState.isLoggedIn || !employeeCode) {
-      cosmoLog(`⏭ skip (no IAM login or no employee_code) — ` +
-          `isLoggedIn=${iamState.isLoggedIn}, employeeCode=${!!employeeCode}`);
+      cosmoLog(`⏭ 跳过 (未登录 IAM 或无 employee_code) —— ` +
+          `isLoggedIn=${iamState.isLoggedIn}, employeeCode 存在? ${!!employeeCode}`);
       return;
     }
     if (!accessToken) {
-      cosmoError(`⏭ skip (no access_token in userInfo — ` +
-          `the /getByEmployeeCode endpoint will 401)`);
+      cosmoError(`⏭ 跳过 (userInfo 中无 access_token —— ` +
+          `调用 /getByEmployeeCode 端点会返回 401)`);
       return;
     }
     // User-protection gate: NEVER overwrite a user-configured apiKey.
@@ -407,17 +412,16 @@ export default class LLMWikiPlugin extends Plugin {
     // touch their settings — even if the IAM login is fresh.
     const existingKey = this.settings.apiKey?.trim();
     if (existingKey) {
-      cosmoLog(`⏭ skip (apiKey already configured, length=${existingKey.length}) — ` +
-          `bootstrap is a one-time auto-fill only. User can re-trigger manually ` +
-          `by clearing apiKey in settings.`);
+      cosmoLog(`⏭ 跳过 (apiKey 已配置,长度=${existingKey.length}) —— ` +
+          `bootstrap 仅作一次性自动填充。用户可在设置中清空 apiKey 后手动重新触发。`);
       return;
     }
     if (isCosmoBootstrapCompleted(employeeCode)) {
-      cosmoLog(`⏭ skip (already completed for employeeCode=${employeeCode})`);
+      cosmoLog(`⏭ 跳过 (employeeCode=${employeeCode} 已完成 bootstrap)`);
       return;
     }
 
-    cosmoLog(`🚀 all preconditions met, running bootstrap (trigger=${trigger})`);
+    cosmoLog(`🚀 所有前置条件满足,开始执行 bootstrap (trigger=${trigger})`);
 
     try {
       await cosmoGptBootstrap({
@@ -436,28 +440,28 @@ export default class LLMWikiPlugin extends Plugin {
         trigger,
       });
       markCosmoBootstrapCompleted(employeeCode);
-      cosmoLog(`✅ cosmoGptBootstrap returned OK; ` +
-          `apiKey length=${this.settings.apiKey.length}, ` +
+      cosmoLog(`✅ cosmoGptBootstrap 返回成功;` +
+          `apiKey 长度=${this.settings.apiKey.length}, ` +
           `baseUrl=${this.settings.baseUrl}, ` +
           `model=${this.settings.model}, ` +
           `availableModels=${this.settings.availableModels?.length ?? 0}`);
 
       // Re-create the LLM client so the freshly written apiKey is picked up,
       // and refresh the wiki engine's view of provider/baseUrl/model.
-      cosmoLog(`re-initializing LLM client + wiki engine…`);
+      cosmoLog(`重新初始化 LLM client + wiki engine…`);
       this.initializeLLMClient();
       this.wikiEngine?.updateSettings(this.settings);
-      cosmoLog(`llmClient=${this.llmClient ? 'initialized' : 'NULL'} — ` +
-          `wikiEngine updated`);
+      cosmoLog(`llmClient=${this.llmClient ? '已初始化' : '为 NULL'} —— ` +
+          `wikiEngine 已更新`);
 
       // Best-effort Test Connection so commands like "Query Wiki" work
       // immediately without a manual "Test Connection" click.
-      cosmoLog(`starting testLLMConnection…`);
+      cosmoLog(`开始执行 testLLMConnection…`);
       const result = await this.testLLMConnection();
       cosmoLog(`testLLMConnection → success=${result.success}, ` +
           `message=${result.message}`);
       if (result.success) {
-        cosmoLog(`🎉 bootstrap fully succeeded (trigger=${trigger})`);
+        cosmoLog(`🎉 bootstrap 全流程成功 (trigger=${trigger})`);
         // Push the freshly written apiKey/baseUrl/model into the settings
         // tab's tempSettings and re-render so the user sees the values
         // immediately (without having to close + reopen the tab).
@@ -470,7 +474,7 @@ export default class LLMWikiPlugin extends Plugin {
           NOTICE_NORMAL,
         );
       } else {
-        cosmoWarn(`⚠️ bootstrap completed but Test Connection failed: ${result.message}`);
+        cosmoWarn(`⚠️ bootstrap 已完成但 Test Connection 失败:${result.message}`);
         // Even on Test Connection failure the apiKey/baseUrl/model have
         // been written — refresh the panel so the user can see/edit them
         // and re-test manually.
@@ -485,7 +489,7 @@ export default class LLMWikiPlugin extends Plugin {
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      cosmoError(`💥 bootstrap threw (trigger=${trigger}): ${msg}`, err);
+      cosmoError(`💥 bootstrap 抛出异常 (trigger=${trigger}):${msg}`, err);
       new Notice(
         getText(this.settings.language, 'cosmoFetchKeyFailed').replace('{}', msg),
         NOTICE_ERROR,

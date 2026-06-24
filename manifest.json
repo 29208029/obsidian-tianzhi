@@ -1,7 +1,7 @@
 {
   "id": "tianzhi",
   "name": "Tianzhi LLM Wiki",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minAppVersion": "1.11.0",
   "isDesktopOnly": false,
   "description": "Tianzhi turns your notes into a Wiki of entities, concepts, and bidirectional links, with cited answers grounded in your own knowledge.",

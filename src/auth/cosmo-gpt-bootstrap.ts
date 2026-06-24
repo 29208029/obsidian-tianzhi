@@ -82,33 +82,33 @@ export async function cosmoGptBootstrap(deps: CosmoBootstrapDeps): Promise<Cosmo
   const defaultBaseUrl = deps.defaultBaseUrl ?? COSMO_DEFAULT_BASE_URL;
   const trigger = deps.trigger ?? 'unspecified';
 
-  log(`▶ start (trigger=${trigger}, employeeCode=${deps.employeeCode}, ` +
-      `provider=${deps.settings.provider}, existing apiKey? ${!!deps.settings.apiKey}, ` +
-      `accessToken length=${deps.accessToken?.length ?? 0})`);
+  log(`▶ 开始 (trigger=${trigger}, employeeCode=${deps.employeeCode}, ` +
+      `provider=${deps.settings.provider}, 已有 apiKey? ${!!deps.settings.apiKey}, ` +
+      `accessToken 长度=${deps.accessToken?.length ?? 0})`);
 
   // 1. 换 key
-  log(`[1/4] fetching API key from IAM for employeeCode=${deps.employeeCode}`);
+  log(`[1/4] 从 IAM 拉取 API key,employeeCode=${deps.employeeCode}`);
   let fullKey: string;
   try {
     const result = await fetchCosmoApiKey(deps.employeeCode, deps.accessToken, deps.requestUrl);
     fullKey = result.fullKey;
-    log(`[1/4] ✅ API key acquired, length=${fullKey.length}, ` +
-        `prefix=${fullKey.slice(0, 6)}…`);
+    log(`[1/4] ✅ 已获取 API key,长度=${fullKey.length}, ` +
+        `前缀=${fullKey.slice(0, 6)}…`);
   } catch (err) {
-    error(`[1/4] ❌ fetchCosmoApiKey failed:`, err);
+    error(`[1/4] ❌ fetchCosmoApiKey 失败:`, err);
     throw err;
   }
 
   // 2. 写 baseUrl + apiKey + provider (强制 anthropic-compatible,因为
   //    https://gpt.cosmoplat.com 用的是 Anthropic Messages API 格式)
-  log(`[2/4] writing provider=anthropic-compatible, apiKey, baseUrl=${defaultBaseUrl} ` +
-      `to settings; resetting llmReady=false`);
+  log(`[2/4] 写入 provider=anthropic-compatible、apiKey、baseUrl=${defaultBaseUrl} ` +
+      `到 settings;重置 llmReady=false`);
   deps.settings.provider = 'anthropic-compatible';
   deps.settings.apiKey = fullKey;
   deps.settings.baseUrl = defaultBaseUrl;
   deps.settings.llmReady = false;
-  log(`[2/4] ✅ settings updated: provider=${deps.settings.provider}, ` +
-      `apiKey length=${deps.settings.apiKey.length}, ` +
+  log(`[2/4] ✅ settings 已更新:provider=${deps.settings.provider}, ` +
+      `apiKey 长度=${deps.settings.apiKey.length}, ` +
       `baseUrl=${deps.settings.baseUrl}`);
 
   // 3. 拉模型列表 —— Anthropic 兼容端点 (https://gpt.cosmoplat.com) 暴露的
@@ -129,7 +129,7 @@ export async function cosmoGptBootstrap(deps: CosmoBootstrapDeps): Promise<Cosmo
       },
     });
   } catch (err) {
-    error(`[3/4] ❌ request /v1/models threw:`, err);
+    error(`[3/4] ❌ 请求 /v1/models 抛出异常:`, err);
     throw new Error(`获取模型列表请求失败：${err instanceof Error ? err.message : String(err)}`);
   }
   log(`[3/4] ← HTTP ${modelsResp.status} from /v1/models`);
@@ -144,33 +144,32 @@ export async function cosmoGptBootstrap(deps: CosmoBootstrapDeps): Promise<Cosmo
     .map(m => m.id)
     .filter((id: string) => !id.includes(':') && !id.includes('/'))
     .sort();
-  log(`[3/4] parsed: rawData=${rawDataLen}, after filter (no ':' or '/')=${availableModels.length}`);
+  log(`[3/4] 解析结果:原始数据=${rawDataLen} 条,过滤后(不含 ':' 或 '/')=${availableModels.length} 条`);
   if (availableModels.length === 0) {
     const err = new Error('获取模型列表失败：列表为空（过滤后）');
     error(`[3/4] ❌ ${err.message}`);
     throw err;
   }
   if (rawDataLen > 0 && availableModels.length <= 5) {
-    // Surface a few model names when the list is small — helps debug
-    // "model not in list" issues during development.
-    log(`[3/4] sample model ids: ${availableModels.slice(0, 5).join(', ')}…`);
+    // 列表较小时打印几个模型名,便于排查「模型不在列表中」的开发期问题。
+    log(`[3/4] 模型 id 样本:${availableModels.slice(0, 5).join(', ')}…`);
   }
   deps.settings.availableModels = availableModels;
   deps.settings.useCustomModel = false;
-  log(`[3/4] ✅ ${availableModels.length} models written to settings.availableModels`);
+  log(`[3/4] ✅ 已写入 ${availableModels.length} 个模型到 settings.availableModels`);
 
   // 4. 选默认模型（存在则选，否则 fallback 到列表第一项）
   const isDefaultAvailable = availableModels.includes(defaultModel);
   const selectedModel = isDefaultAvailable ? defaultModel : availableModels[0];
   deps.settings.model = selectedModel;
   if (isDefaultAvailable) {
-    log(`[4/4] ✅ selected default model "${defaultModel}" (in list)`);
+    log(`[4/4] ✅ 选中默认模型 "${defaultModel}"(在列表中)`);
   } else {
-    log(`[4/4] ⚠️ default model "${defaultModel}" NOT in list, fallback to first: "${selectedModel}"`);
+    log(`[4/4] ⚠️ 默认模型 "${defaultModel}" 不在列表中,回退到第一项:"${selectedModel}"`);
   }
 
-  log(`✔ end (trigger=${trigger}, model=${selectedModel}, ` +
-      `availableModels=${availableModels.length}, ready=false [Test Connection deferred to caller])`);
+  log(`✔ 结束 (trigger=${trigger}, model=${selectedModel}, ` +
+      `availableModels=${availableModels.length}, ready=false [Test Connection 由调用方决定])`);
 
   return {
     apiKey: fullKey,
@@ -193,13 +192,13 @@ export function isCosmoBootstrapCompleted(employeeCode: string): boolean {
 
 export function markCosmoBootstrapCompleted(employeeCode: string): void {
   // eslint-disable-next-line obsidianmd/rule-custom-message
-  console.log(LOG_TAG, `mark completed: employeeCode=${employeeCode}, cache size=${completedKeys.size + 1}`);
+  console.log(LOG_TAG, `标记完成:employeeCode=${employeeCode}, 缓存大小=${completedKeys.size + 1}`);
   completedKeys.add(employeeCode);
 }
 
 export function clearCosmoBootstrapCache(): void {
   // eslint-disable-next-line obsidianmd/rule-custom-message
-  console.log(LOG_TAG, `clear cache: was size=${completedKeys.size}`);
+  console.log(LOG_TAG, `清空缓存:原大小=${completedKeys.size}`);
   completedKeys.clear();
 }
 

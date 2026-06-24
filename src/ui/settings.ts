@@ -62,7 +62,7 @@ export class LLMWikiSettingTab extends PluginSettingTab {
    */
   refreshFromPluginSettings(): void {
     settingsLog('refreshFromPluginSettings: ' +
-        `apiKey length ${this.tempSettings.apiKey?.length ?? 0} → ${this.plugin.settings.apiKey?.length ?? 0}, ` +
+        `apiKey 长度 ${this.tempSettings.apiKey?.length ?? 0} → ${this.plugin.settings.apiKey?.length ?? 0}, ` +
         `baseUrl "${this.tempSettings.baseUrl}" → "${this.plugin.settings.baseUrl}", ` +
         `provider "${this.tempSettings.provider}" → "${this.plugin.settings.provider}", ` +
         `model "${this.tempSettings.model}" → "${this.plugin.settings.model}"`);
@@ -230,8 +230,8 @@ export class LLMWikiSettingTab extends PluginSettingTab {
             const iamState = IAMAuthService.getInstance().getState();
             const employeeCode = iamState.userInfo?.employee_code;
             if (iamState.isLoggedIn && employeeCode && !this.tempSettings.apiKey) {
-              settingsLog('provider→cosmogpt, IAM logged in, ' +
-                  `apiKey empty → calling plugin.runCosmoBootstrap()`);
+              settingsLog('provider→cosmogpt 且 IAM 已登录,' +
+                  `apiKey 为空 → 调用 plugin.runCosmoBootstrap()`);
               // bootstrap 内部会自己把 provider 设为 anthropic-compatible
               // (因为 https://gpt.cosmoplat.com 用的是 Anthropic Messages API)
               this.plugin.settings.provider = 'anthropic-compatible';
@@ -345,13 +345,13 @@ export class LLMWikiSettingTab extends PluginSettingTab {
 if (this.tempSettings.provider === 'cosmogpt') {
       const iamState = IAMAuthService.getInstance().getState();
       const loggedIn = iamState.isLoggedIn && !!iamState.userInfo?.employee_code;
-      settingsLog('rendering status card: ' +
+      settingsLog('渲染状态卡片:' +
           `provider=cosmogpt, isLoggedIn=${iamState.isLoggedIn}, ` +
-          `userName=${iamState.userInfo?.user_name ?? '(none)'}, ` +
-          `employeeCode=${iamState.userInfo?.employee_code ?? '(missing)'}, ` +
+          `userName=${iamState.userInfo?.user_name ?? '(无)'}, ` +
+          `employeeCode=${iamState.userInfo?.employee_code ?? '(缺失)'}, ` +
           `loggedIn=${loggedIn}, ` +
-          `settings.apiKey present? ${!!this.tempSettings.apiKey}, ` +
-          `settings.model=${this.tempSettings.model || '(empty)'}`);
+          `settings.apiKey 已配置? ${!!this.tempSettings.apiKey}, ` +
+          `settings.model=${this.tempSettings.model || '(空)'}`);
       new Setting(containerEl)
         .setName(this.getText('cosmoSection'))
         .setDesc(loggedIn
@@ -369,11 +369,9 @@ if (this.tempSettings.provider === 'cosmogpt') {
           .setButtonText(this.getText('authLoginButton'))
           .setCta()
           .onClick(() => {
-            settingsLog('user clicked "Sign In" button ' +
-                '— invoking IAMAuthService.login()');
+            settingsLog('用户点击"登录"按钮 — 调用 IAMAuthService.login()');
             void IAMAuthService.getInstance().login().then(() => {
-              settingsLog('IAM login resolved OK; ' +
-                  'calling plugin.runCosmoBootstrap()');
+              settingsLog('IAM 登录完成;调用 plugin.runCosmoBootstrap()');
               // bootstrap 内部会把 provider 设为 anthropic-compatible 并填入
               // baseUrl/apiKey/model —— 用户期望"登录完直接能用",而不是
               // 先选 cosmogpt provider。这里不预设 provider,让 bootstrap 决定。
@@ -381,7 +379,7 @@ if (this.tempSettings.provider === 'cosmogpt') {
               void this.plugin.runCosmoBootstrap();
             }).catch((err: unknown) => {
               const msg = err instanceof Error ? err.message : String(err);
-              settingsError('IAM login failed:', err);
+              settingsError('IAM 登录失败:', err);
               new Notice(this.getText('authLoginFailed').replace('{}', msg), NOTICE_ERROR);
             });
           }));
